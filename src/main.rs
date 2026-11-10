@@ -376,6 +376,8 @@ struct HintView {
     choices: Vec<(String, String)>,
 }
 const EX_COMMANDS: &[(&str, &str)] = &[
+    ("$end", "salva ed esci"),
+    ("$quit", "esci senza salvare"),
     ("w", "salva"),
     ("wa", "salva tutti"),
     ("wq", "salva ed esci"),
@@ -607,7 +609,12 @@ fn append_command_popup(
         "\x1b[{y};{x}H{background}{border}╭{title}{}╮\x1b[0m",
         "─".repeat(inside - title.chars().count())
     ));
-    let prefix = " > :";
+    let sigil = if editor.prompt.starts_with('$') {
+        ""
+    } else {
+        ":"
+    };
+    let prefix = format!(" > {sigil}");
     let available = inside.saturating_sub(visual_width(prefix.chars()));
     let mut tail = Vec::new();
     let mut used = 0;
@@ -622,7 +629,7 @@ fn append_command_popup(
     tail.reverse();
     let display: String = tail.into_iter().collect();
     let content = format!("{prefix}{display}");
-    out.push_str(&format!("\x1b[{};{x}H{background}{border}│\x1b[38;2;125;207;255m > \x1b[38;2;192;202;245m:{}{background}{border}│\x1b[0m", y + 1, fit_cells(&display, available)));
+    out.push_str(&format!("\x1b[{};{x}H{background}{border}│\x1b[38;2;125;207;255m > \x1b[38;2;192;202;245m{sigil}{}{background}{border}│\x1b[0m", y + 1, fit_cells(&display, available)));
     out.push_str(&format!(
         "\x1b[{};{x}H{background}{border}╰{}╯\x1b[0m",
         y + 2,
@@ -816,7 +823,10 @@ fn draw(
         .map(|line| visual_width(line.chars().take(editor.col)))
         .unwrap_or(0);
     keep_cursor_visible(left, cursor_visual, available);
-    let mut out = format!("\x1b[?25l{}\x1b[2J\x1b[0m\x1b[H", canvas_background(config));
+    let mut out = format!(
+        "\x1b[?2026h\x1b[?25l{}\x1b[0m\x1b[H",
+        canvas_background(config)
+    );
     append_header(&mut out, workspace, config, width);
     out.push_str("\r\n");
     let dim = if config.ui.theme == "light" {
@@ -987,7 +997,9 @@ fn draw(
             out.push_str(" > Tab: completa  |  Invio: esegui  |  Esc: chiudi")
         }
         Mode::Command => {
-            out.push(':');
+            if !editor.prompt.starts_with('$') {
+                out.push(':');
+            }
             out.push_str(&editor.prompt)
         }
         Mode::Picker => {
@@ -1009,7 +1021,14 @@ fn draw(
         if matches!(editor.mode, Mode::Search(_) | Mode::Command | Mode::Picker) {
             (
                 height,
-                editor.prompt.chars().count() + if editor.mode == Mode::Picker { 12 } else { 2 },
+                editor.prompt.chars().count()
+                    + if editor.mode == Mode::Picker {
+                        12
+                    } else if editor.mode == Mode::Command && editor.prompt.starts_with('$') {
+                        1
+                    } else {
+                        2
+                    },
             )
         } else {
             (cursor_row, cursor_col.min(width))
@@ -1018,7 +1037,9 @@ fn draw(
     let (cursor_row, cursor_col) = append_command_popup(&mut out, editor, config, width, height)
         .unwrap_or((cursor_row, cursor_col));
     append_completion_popup(&mut out, editor, width, height, (cursor_row, cursor_col));
-    out.push_str(&format!("\x1b[{cursor_row};{cursor_col}H\x1b[?25h"));
+    out.push_str(&format!(
+        "\x1b[{cursor_row};{cursor_col}H\x1b[?25h\x1b[?2026l"
+    ));
     io::stdout().write_all(out.as_bytes())?;
     io::stdout().flush()
 }
@@ -1186,8 +1207,17 @@ fn draw_split(
         height: height.saturating_sub(3),
     });
     let editor = workspace.active();
-    let mut out = format!("\x1b[?25l{}\x1b[2J\x1b[0m\x1b[H", canvas_background(config));
+    let mut out = format!(
+        "\x1b[?2026h\x1b[?25l{}\x1b[0m\x1b[H",
+        canvas_background(config)
+    );
     append_header(&mut out, workspace, config, width);
+    for row in 2..height.saturating_sub(1) {
+        out.push_str(&format!(
+            "\x1b[{row};1H{}\x1b[2K",
+            canvas_background(config)
+        ));
+    }
     for divider in dividers {
         match divider.axis {
             SplitAxis::Vertical => {
@@ -1351,7 +1381,9 @@ fn draw_split(
             out.push_str(" > Tab: completa  |  Invio: esegui  |  Esc: chiudi")
         }
         Mode::Command => {
-            out.push(':');
+            if !editor.prompt.starts_with('$') {
+                out.push(':');
+            }
             out.push_str(&editor.prompt);
         }
         Mode::Picker => {
@@ -1363,14 +1395,21 @@ fn draw_split(
     if matches!(editor.mode, Mode::Search(_) | Mode::Command | Mode::Picker) {
         cursor = (
             height,
-            editor.prompt.chars().count() + if editor.mode == Mode::Picker { 12 } else { 2 },
+            editor.prompt.chars().count()
+                + if editor.mode == Mode::Picker {
+                    12
+                } else if editor.mode == Mode::Command && editor.prompt.starts_with('$') {
+                    1
+                } else {
+                    2
+                },
         );
     }
     append_hint_overlay(&mut out, workspace, config, width, height);
     cursor = append_command_popup(&mut out, editor, config, width, height).unwrap_or(cursor);
     append_completion_popup(&mut out, editor, width, height, cursor);
     out.push_str(&format!(
-        "\x1b[{};{}H\x1b[?25h",
+        "\x1b[{};{}H\x1b[?25h\x1b[?2026l",
         cursor.0.min(height),
         cursor.1.min(width)
     ));

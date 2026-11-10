@@ -1526,8 +1526,8 @@ impl Editor {
                     self.quit = true
                 }
             }
-            "q!" | "quit!" => self.quit = true,
-            "wq" | "x" => {
+            "q!" | "quit!" | "$quit" => self.quit = true,
+            "wq" | "x" | "$end" => {
                 if let Err(e) = self.save() {
                     self.message = e.to_string()
                 } else {

@@ -181,6 +181,7 @@ pub struct Workspace {
     next_window: usize,
     window_prefix: bool,
     tab_prefix: bool,
+    dollar_prefix: bool,
     pub quit: bool,
 }
 impl Workspace {
@@ -215,6 +216,7 @@ impl Workspace {
             next_window: 1,
             window_prefix: false,
             tab_prefix: false,
+            dollar_prefix: false,
             quit: false,
         })
     }
@@ -224,6 +226,12 @@ impl Workspace {
     pub fn command_hint(&self) -> Option<CommandHint> {
         if self.active().mode != Mode::Normal {
             return self.active().command_hint();
+        }
+        if self.dollar_prefix {
+            return Some(CommandHint {
+                title: "Comandi $",
+                choices: &[("$end", "salva ed esci"), ("$quit", "esci senza salvare")],
+            });
         }
         if self.window_prefix {
             return Some(CommandHint {
@@ -726,11 +734,11 @@ impl Workspace {
                 self.close_window();
                 true
             }
-            "q!" | "quit!" if self.window_count() > 1 || self.tabs.len() > 1 => {
+            "q!" | "quit!" | "$quit" if self.window_count() > 1 || self.tabs.len() > 1 => {
                 self.close_window();
                 true
             }
-            "wq" | "x" if self.window_count() > 1 || self.tabs.len() > 1 => {
+            "wq" | "x" | "$end" if self.window_count() > 1 || self.tabs.len() > 1 => {
                 match self.active_mut().save() {
                     Ok(()) => self.close_window(),
                     Err(e) => self.active_mut().message = e.to_string(),
@@ -745,11 +753,11 @@ impl Workspace {
                 }
                 true
             }
-            "q!" | "quit!" => {
+            "q!" | "quit!" | "$quit" => {
                 self.quit = true;
                 true
             }
-            "wq" | "x" => {
+            "wq" | "x" | "$end" => {
                 match self.active_mut().save() {
                     Ok(()) => {
                         if self.buffers.iter().any(|buffer| buffer.modified) {
@@ -794,6 +802,25 @@ impl Workspace {
     }
     pub fn handle(&mut self, key: Key) {
         if self.active().mode == Mode::Normal {
+            if self.dollar_prefix {
+                self.dollar_prefix = false;
+                if matches!(key, Key::Char('e' | 'q')) {
+                    self.active_mut().mode = Mode::Command;
+                    self.active_mut().prompt = format!(
+                        "${}",
+                        match key {
+                            Key::Char(c) => c,
+                            _ => unreachable!(),
+                        }
+                    );
+                    return;
+                }
+            }
+            if key == Key::Char('$') && !self.tab_prefix && !self.window_prefix {
+                self.active_mut().handle(key);
+                self.dollar_prefix = true;
+                return;
+            }
             if self.tab_prefix {
                 self.tab_prefix = false;
                 match key {
@@ -1095,6 +1122,39 @@ mod tests {
             workspace.handle(Key::Char(c))
         }
         workspace.handle(Key::Enter);
+    }
+    #[test]
+    fn dollar_commands_save_or_discard_and_keep_line_end_motion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "abc\n").unwrap();
+        let mut workspace = Workspace::open(Some(path.clone()), false).unwrap();
+        workspace.handle(Key::Char('$'));
+        assert_eq!(workspace.active().col, 2);
+        workspace.handle(Key::Left);
+        assert_eq!(workspace.active().col, 1);
+
+        workspace.handle(Key::Char('i'));
+        workspace.handle(Key::Char('X'));
+        workspace.handle(Key::Esc);
+        for key in "$end".chars() {
+            workspace.handle(Key::Char(key));
+        }
+        assert_eq!(workspace.active().prompt, "$end");
+        workspace.handle(Key::Enter);
+        assert!(workspace.quit);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "aXbc\n");
+
+        let mut workspace = Workspace::open(Some(path.clone()), false).unwrap();
+        workspace.handle(Key::Char('i'));
+        workspace.handle(Key::Char('Y'));
+        workspace.handle(Key::Esc);
+        for key in "$quit".chars() {
+            workspace.handle(Key::Char(key));
+        }
+        workspace.handle(Key::Enter);
+        assert!(workspace.quit);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "aXbc\n");
     }
     #[test]
     fn switch_buffers_preserves_unsaved_state_and_undo() {
