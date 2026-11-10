@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+project=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+target=${ETOT_INSTALL_PATH:-"$HOME/usr/bin/etot"}
+case "$target" in
+  /*) ;;
+  *) printf '%s\n' 'ETOT_INSTALL_PATH must be absolute' >&2; exit 2 ;;
+esac
+if [ -x "$HOME/.cargo/bin/cargo" ]; then
+  cargo_executable="$HOME/.cargo/bin/cargo"
+else
+  cargo_executable=$(command -v cargo)
+fi
+"$cargo_executable" build --release --manifest-path "$project/Cargo.toml" -q
+install -d "$(dirname -- "$target")"
+temporary=$(mktemp "$(dirname -- "$target")/.etot.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT HUP INT TERM
+install -m 755 "$project/target/release/etot" "$temporary"
+mv -f -- "$temporary" "$target"
+printf 'ETOT Rust installed at %s\n' "$target"

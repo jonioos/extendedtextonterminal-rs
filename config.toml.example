@@ -1,0 +1,18 @@
+# Copy to ~/.config/etot/config.toml
+[ui]
+line_numbers = true
+relative_numbers = false
+theme = "dark"
+
+[keys.normal]
+# J = "5j"
+
+# Optional language server override by file extension.
+# [languages.rs]
+# command = ["rust-analyzer"]
+# language_id = "rust"
+# Set command = [] for a language to avoid starting its external LSP server.
+# Built-in syntax highlighting does not require an LSP server.
+# [languages.py]
+# command = []
+# language_id = "python"
