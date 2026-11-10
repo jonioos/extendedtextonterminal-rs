@@ -151,7 +151,7 @@ impl Terminal {
         Ok(Self { previous })
     }
     fn suspend(&self) -> io::Result<()> {
-        print!("\x1b[?25h\x1b[?1049l\x1b[0m");
+        print!("\x1b[0 q\x1b[?25h\x1b[?1049l\x1b[0m");
         io::stdout().flush()?;
         if Command::new("stty").arg(&self.previous).status()?.success() {
             Ok(())
@@ -194,9 +194,16 @@ impl Terminal {
 }
 impl Drop for Terminal {
     fn drop(&mut self) {
-        print!("\x1b[?25h\x1b[?1049l\x1b[0m");
+        print!("\x1b[0 q\x1b[?25h\x1b[?1049l\x1b[0m");
         let _ = io::stdout().flush();
         let _ = Command::new("stty").arg(&self.previous).status();
+    }
+}
+fn cursor_shape(mode: Mode) -> &'static str {
+    if mode == Mode::Insert {
+        "\x1b[6 q"
+    } else {
+        "\x1b[2 q"
     }
 }
 fn size() -> (usize, usize) {
@@ -1038,7 +1045,8 @@ fn draw(
         .unwrap_or((cursor_row, cursor_col));
     append_completion_popup(&mut out, editor, width, height, (cursor_row, cursor_col));
     out.push_str(&format!(
-        "\x1b[{cursor_row};{cursor_col}H\x1b[?25h\x1b[?2026l"
+        "\x1b[{cursor_row};{cursor_col}H{}\x1b[?25h\x1b[?2026l",
+        cursor_shape(editor.mode)
     ));
     io::stdout().write_all(out.as_bytes())?;
     io::stdout().flush()
@@ -1409,9 +1417,10 @@ fn draw_split(
     cursor = append_command_popup(&mut out, editor, config, width, height).unwrap_or(cursor);
     append_completion_popup(&mut out, editor, width, height, cursor);
     out.push_str(&format!(
-        "\x1b[{};{}H\x1b[?25h\x1b[?2026l",
+        "\x1b[{};{}H{}\x1b[?25h\x1b[?2026l",
         cursor.0.min(height),
-        cursor.1.min(width)
+        cursor.1.min(width),
+        cursor_shape(editor.mode)
     ));
     io::stdout().write_all(out.as_bytes())?;
     io::stdout().flush()
