@@ -512,7 +512,10 @@ fn append_hint_overlay(
     let Some(hint) = hint_view(workspace) else {
         return;
     };
-    let command_mode = workspace.active().mode == Mode::Command && width >= 36 && height >= 10;
+    let command_mode = (workspace.active().mode == Mode::Command
+        || workspace.dollar_prefix_pending())
+        && width >= 36
+        && height >= 10;
     let box_width = if command_mode {
         width.saturating_sub(8).min(64)
     } else {
@@ -593,12 +596,14 @@ fn fit_cells(text: &str, width: usize) -> String {
 }
 fn append_command_popup(
     out: &mut String,
-    editor: &etot_rs::Editor,
+    workspace: &Workspace,
     config: &Config,
     width: usize,
     height: usize,
 ) -> Option<(usize, usize)> {
-    if editor.mode != Mode::Command || width < 36 || height < 10 {
+    let editor = workspace.active();
+    let pending_dollar = workspace.dollar_prefix_pending();
+    if (editor.mode != Mode::Command && !pending_dollar) || width < 36 || height < 10 {
         return None;
     }
     let box_width = width.saturating_sub(8).min(64);
@@ -616,16 +621,13 @@ fn append_command_popup(
         "\x1b[{y};{x}H{background}{border}╭{title}{}╮\x1b[0m",
         "─".repeat(inside - title.chars().count())
     ));
-    let sigil = if editor.prompt.starts_with('$') {
-        ""
-    } else {
-        ":"
-    };
+    let prompt = if pending_dollar { "$" } else { &editor.prompt };
+    let sigil = if prompt.starts_with('$') { "" } else { ":" };
     let prefix = format!(" > {sigil}");
     let available = inside.saturating_sub(visual_width(prefix.chars()));
     let mut tail = Vec::new();
     let mut used = 0;
-    for ch in editor.prompt.chars().rev().filter(|ch| !ch.is_control()) {
+    for ch in prompt.chars().rev().filter(|ch| !ch.is_control()) {
         let cells = UnicodeWidthChar::width(ch).unwrap_or(0);
         if used + cells > available {
             break;
@@ -642,7 +644,7 @@ fn append_command_popup(
         y + 2,
         "─".repeat(inside)
     ));
-    Some((
+    (!pending_dollar).then_some((
         y + 1,
         (x + 1 + visual_width(content.chars())).min(x + box_width - 2),
     ))
@@ -1041,7 +1043,7 @@ fn draw(
             (cursor_row, cursor_col.min(width))
         };
     append_hint_overlay(&mut out, workspace, config, width, height);
-    let (cursor_row, cursor_col) = append_command_popup(&mut out, editor, config, width, height)
+    let (cursor_row, cursor_col) = append_command_popup(&mut out, workspace, config, width, height)
         .unwrap_or((cursor_row, cursor_col));
     append_completion_popup(&mut out, editor, width, height, (cursor_row, cursor_col));
     out.push_str(&format!(
@@ -1414,7 +1416,7 @@ fn draw_split(
         );
     }
     append_hint_overlay(&mut out, workspace, config, width, height);
-    cursor = append_command_popup(&mut out, editor, config, width, height).unwrap_or(cursor);
+    cursor = append_command_popup(&mut out, workspace, config, width, height).unwrap_or(cursor);
     append_completion_popup(&mut out, editor, width, height, cursor);
     out.push_str(&format!(
         "\x1b[{};{}H{}\x1b[?25h\x1b[?2026l",
@@ -2000,7 +2002,7 @@ mod tests {
             ["set background=dark", "set background=light"]
         );
         let config = Config::default();
-        let cursor = append_command_popup(&mut output, workspace.active(), &config, 100, 24);
+        let cursor = append_command_popup(&mut output, &workspace, &config, 100, 24);
         assert_eq!(cursor.map(|position| position.0), Some(5));
         assert!(output.contains("Cmdline"));
         assert!(output.contains(":Lsp"));
@@ -2011,6 +2013,30 @@ mod tests {
         append_statusline(&mut output, &workspace, &config, &[], 100, 24);
         assert!(output.contains("COMMAND >"));
         assert!(output.contains("TXT"));
+    }
+    #[test]
+    fn dollar_commands_appear_below_top_cmdline() {
+        let mut workspace = Workspace::open(None, false).unwrap();
+        workspace.active_mut().lines = vec!["abc".into()];
+        workspace.handle(Key::Char('$'));
+        assert_eq!(workspace.active().col, 2);
+        let config = Config::default();
+        let mut popup = String::new();
+        assert!(append_command_popup(&mut popup, &workspace, &config, 100, 24).is_none());
+        assert!(popup.contains("Cmdline"));
+        assert!(popup.contains('$'));
+        assert!(!popup.contains(":$"));
+        let mut hints = String::new();
+        append_hint_overlay(&mut hints, &workspace, &config, 100, 24);
+        assert!(hints.contains("\x1b[7;19H"));
+        assert!(hints.contains("$end"));
+        assert!(hints.contains("$quit"));
+
+        workspace.handle(Key::Char('e'));
+        assert_eq!(workspace.active().mode, Mode::Command);
+        popup.clear();
+        assert!(append_command_popup(&mut popup, &workspace, &config, 100, 24).is_some());
+        assert!(popup.contains("$e"));
     }
     #[test]
     fn completion_popup_shows_selection_without_replacing_buffer() {

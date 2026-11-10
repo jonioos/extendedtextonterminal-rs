@@ -223,6 +223,9 @@ impl Workspace {
     pub fn active(&self) -> &Editor {
         &self.buffers[self.current]
     }
+    pub fn dollar_prefix_pending(&self) -> bool {
+        self.dollar_prefix && self.active().mode == Mode::Normal
+    }
     pub fn command_hint(&self) -> Option<CommandHint> {
         if self.active().mode != Mode::Normal {
             return self.active().command_hint();
