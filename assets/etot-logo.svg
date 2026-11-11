@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="220 84 1733 554" role="img" aria-labelledby="title desc">
+<title id="title">ETOT — editor di testo</title>
+<desc id="desc">Logo tipografico geometrico rosso con diagonali alternate in sequenza su, giù, su, giù.</desc>
+<defs>
+  <clipPath id="E"><path d="M272 145H636V265H403V310H602V397H403V440H654V565H272Z"/></clipPath>
+  <clipPath id="T1"><path d="M671 145H1060V265H938V565H794V265H671Z"/></clipPath>
+  <clipPath id="O"><circle cx="1282" cy="358" r="217"/></clipPath>
+  <clipPath id="T2"><path d="M1512 145H1901V265H1778V565H1634V265H1512Z"/></clipPath>
+</defs>
+<!-- E: salita. Due tagli ritmici che condividono il linguaggio geometrico. -->
+<g clip-path="url(#E)">
+  <path fill="#E40019" d="M250 100H680V600H250Z"/>
+  <path fill="#FA353D" d="M272 145H403V440H272Z"/>
+  <path fill="#F00018" d="M403 145H618L403 265Z"/>
+  <path fill="#97000F" d="M618 145H660V275H403V265Z"/>
+  <path fill="#9F0011" d="M403 310H670V400H403Z"/>
+  <path fill="#97000F" d="M250 440H272L478 565H250Z"/>
+  <path fill="#D40019" d="M272 440H425L654 565H478Z"/>
+  <path fill="#F00019" d="M272 440H685V565H478Z"/>
+</g>
+<!-- T: discesa. Le campiture seguono il medesimo asse inclinato. -->
+<g clip-path="url(#T1)">
+  <path fill="#B30015" d="M650 100H1080V600H650Z"/>
+  <path fill="#950010" d="M671 145H804L925 265H671Z"/>
+  <path fill="#F0001B" d="M804 145H1080V265H925Z"/>
+  <path fill="#D70018" d="M794 265H938V565H794Z"/>
+  <path fill="#A90013" d="M794 265H831L938 394V450Z"/>
+  <path fill="#FA343F" d="M794 419L938 553V565H794Z"/>
+</g>
+<!-- O: salita, due fasce parallele con identica inclinazione. -->
+<g clip-path="url(#O)">
+  <path fill="#97000F" d="M1050 125H1510V590H1050Z"/>
+  <path fill="#E70019" d="M960 517L1430 107H1700V750H960Z"/>
+  <path fill="#FA3540" d="M900 725L1700 85V750H900Z"/>
+</g>
+<!-- T: discesa, bilancia la prima T e chiude il ritmo alternato. -->
+<g clip-path="url(#T2)">
+  <path fill="#B30015" d="M1490 100H1920V600H1490Z"/>
+  <path fill="#950010" d="M1512 145H1645L1766 265H1512Z"/>
+  <path fill="#F0001B" d="M1645 145H1920V265H1766Z"/>
+  <path fill="#D70018" d="M1634 265H1778V565H1634Z"/>
+  <path fill="#A90013" d="M1634 265H1671L1778 394V450Z"/>
+  <path fill="#FA343F" d="M1634 419L1778 553V565H1634Z"/>
+</g>
+</svg>

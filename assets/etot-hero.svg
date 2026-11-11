@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="460" viewBox="0 0 1200 460" role="img" aria-labelledby="hero-title hero-desc">
+<title id="hero-title">ETOT — Jonio Extended Text On Terminal</title>
+<desc id="hero-desc">Logo ETOT rosso accanto a una finestra illustrativa dell'editor su fondo scuro.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101724"/><stop offset=".55" stop-color="#171d31"/><stop offset="1" stop-color="#0c1322"/></linearGradient>
+  <linearGradient id="edge" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#ff4655"/><stop offset="1" stop-color="#8faaff"/></linearGradient>
+  <radialGradient id="glow"><stop stop-color="#e40019" stop-opacity=".24"/><stop offset="1" stop-color="#e40019" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="1200" height="460" rx="24" fill="url(#bg)"/>
+<circle cx="220" cy="140" r="260" fill="url(#glow)"/>
+<g opacity=".13" stroke="#8faaff" stroke-width="1"><path d="M0 80H1200M0 160H1200M0 240H1200M0 320H1200M0 400H1200M80 0V460M160 0V460M240 0V460M320 0V460M400 0V460M480 0V460M560 0V460"/></g>
+<path d="M0 0H1200" stroke="url(#edge)" stroke-width="5"/>
+<g transform="translate(63 71) scale(.25) translate(-220 -84)">
+<title id="title">ETOT — editor di testo</title>
+<desc id="desc">Logo tipografico geometrico rosso con diagonali alternate in sequenza su, giù, su, giù.</desc>
+<defs>
+  <clipPath id="E"><path d="M272 145H636V265H403V310H602V397H403V440H654V565H272Z"/></clipPath>
+  <clipPath id="T1"><path d="M671 145H1060V265H938V565H794V265H671Z"/></clipPath>
+  <clipPath id="O"><circle cx="1282" cy="358" r="217"/></clipPath>
+  <clipPath id="T2"><path d="M1512 145H1901V265H1778V565H1634V265H1512Z"/></clipPath>
+</defs>
+<!-- E: salita. Due tagli ritmici che condividono il linguaggio geometrico. -->
+<g clip-path="url(#E)">
+  <path fill="#E40019" d="M250 100H680V600H250Z"/>
+  <path fill="#FA353D" d="M272 145H403V440H272Z"/>
+  <path fill="#F00018" d="M403 145H618L403 265Z"/>
+  <path fill="#97000F" d="M618 145H660V275H403V265Z"/>
+  <path fill="#9F0011" d="M403 310H670V400H403Z"/>
+  <path fill="#97000F" d="M250 440H272L478 565H250Z"/>
+  <path fill="#D40019" d="M272 440H425L654 565H478Z"/>
+  <path fill="#F00019" d="M272 440H685V565H478Z"/>
+</g>
+<!-- T: discesa. Le campiture seguono il medesimo asse inclinato. -->
+<g clip-path="url(#T1)">
+  <path fill="#B30015" d="M650 100H1080V600H650Z"/>
+  <path fill="#950010" d="M671 145H804L925 265H671Z"/>
+  <path fill="#F0001B" d="M804 145H1080V265H925Z"/>
+  <path fill="#D70018" d="M794 265H938V565H794Z"/>
+  <path fill="#A90013" d="M794 265H831L938 394V450Z"/>
+  <path fill="#FA343F" d="M794 419L938 553V565H794Z"/>
+</g>
+<!-- O: salita, due fasce parallele con identica inclinazione. -->
+<g clip-path="url(#O)">
+  <path fill="#97000F" d="M1050 125H1510V590H1050Z"/>
+  <path fill="#E70019" d="M960 517L1430 107H1700V750H960Z"/>
+  <path fill="#FA3540" d="M900 725L1700 85V750H900Z"/>
+</g>
+<!-- T: discesa, bilancia la prima T e chiude il ritmo alternato. -->
+<g clip-path="url(#T2)">
+  <path fill="#B30015" d="M1490 100H1920V600H1490Z"/>
+  <path fill="#950010" d="M1512 145H1645L1766 265H1512Z"/>
+  <path fill="#F0001B" d="M1645 145H1920V265H1766Z"/>
+  <path fill="#D70018" d="M1634 265H1778V565H1634Z"/>
+  <path fill="#A90013" d="M1634 265H1671L1778 394V450Z"/>
+  <path fill="#FA343F" d="M1634 419L1778 553V565H1634Z"/>
+</g>
+</g>
+<text x="70" y="261" fill="#f2f5ff" font-family="DejaVu Sans,Arial,sans-serif" font-weight="700" font-size="27">Jonio Extended Text On Terminal</text>
+<text x="70" y="300" fill="#a9b8d5" font-family="DejaVu Sans,Arial,sans-serif" font-size="22">Editor di testo per jonioOS</text>
+<rect x="70" y="342" width="472" height="53" rx="12" fill="#222b40" stroke="#43506e"/>
+<text x="91" y="375" fill="#ff5b6d" font-family="DejaVu Sans Mono,monospace" font-size="16">2019</text>
+<text x="143" y="375" fill="#b8c4de" font-family="DejaVu Sans Mono,monospace" font-size="16">TOT  →  ETOT  →  Rust</text>
+<rect x="641" y="56" width="510" height="368" rx="16" fill="#050812" opacity=".4"/>
+<g>
+ <rect x="635" y="45" width="510" height="368" rx="16" fill="#20253a" stroke="#526181"/>
+ <rect x="635" y="45" width="510" height="42" rx="16" fill="#30374f"/>
+ <path d="M635 71V87H1145V71" fill="#30374f"/>
+ <circle cx="663" cy="66" r="5" fill="#ff6674"/><circle cx="680" cy="66" r="5" fill="#ffd16e"/><circle cx="697" cy="66" r="5" fill="#7edca1"/>
+ <text x="904" y="71" fill="#dbe5ff" font-family="DejaVu Sans Mono,monospace" font-size="14" text-anchor="middle">ETOT  ◇  src/main.rs</text>
+ <rect x="651" y="100" width="478" height="33" rx="5" fill="#303651"/>
+ <text x="665" y="122" fill="#ff9c72" font-family="DejaVu Sans Mono,monospace" font-size="15">1</text>
+ <text x="701" y="122" fill="#95b5ff" font-family="DejaVu Sans Mono,monospace" font-size="15">fn</text>
+ <text x="728" y="122" fill="#dce6ff" font-family="DejaVu Sans Mono,monospace" font-size="15"> main() {</text>
+ <text x="665" y="159" fill="#75829e" font-family="DejaVu Sans Mono,monospace" font-size="15">2</text>
+ <text x="701" y="159" fill="#cfabff" font-family="DejaVu Sans Mono,monospace" font-size="15">  let</text>
+ <text x="754" y="159" fill="#dce6ff" font-family="DejaVu Sans Mono,monospace" font-size="15"> editor = </text>
+ <text x="866" y="159" fill="#a5e7af" font-family="DejaVu Sans Mono,monospace" font-size="15">"ETOT"</text>
+ <text x="928" y="159" fill="#dce6ff" font-family="DejaVu Sans Mono,monospace" font-size="15">;</text>
+ <text x="665" y="196" fill="#75829e" font-family="DejaVu Sans Mono,monospace" font-size="15">3</text>
+ <text x="701" y="196" fill="#dce6ff" font-family="DejaVu Sans Mono,monospace" font-size="15">  println!("{editor}");</text>
+ <text x="665" y="233" fill="#75829e" font-family="DejaVu Sans Mono,monospace" font-size="15">4</text>
+ <text x="701" y="233" fill="#dce6ff" font-family="DejaVu Sans Mono,monospace" font-size="15">}</text>
+ <rect x="657" y="274" width="466" height="66" rx="9" fill="#171e31" stroke="#6d85ae"/>
+ <text x="674" y="298" fill="#76d9ff" font-family="DejaVu Sans Mono,monospace" font-size="13">COMMAND LINE</text>
+ <text x="675" y="325" fill="#eaf0ff" font-family="DejaVu Sans Mono,monospace" font-size="17">›  :Format</text>
+ <path d="M643 366H1137" stroke="#465371"/>
+ <text x="658" y="390" fill="#91aaff" font-family="DejaVu Sans Mono,monospace" font-size="13">NORMAL</text>
+ <text x="784" y="390" fill="#b7c5e0" font-family="DejaVu Sans Mono,monospace" font-size="13">Rust  •  1:1</text>
+ <text x="1015" y="390" fill="#ff8a9a" font-family="DejaVu Sans Mono,monospace" font-size="13">VIM COMPATIBLE</text>
+</g>
+</svg>
