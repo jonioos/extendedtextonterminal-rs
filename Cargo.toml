@@ -35,6 +35,9 @@ tree-sitter-lua = "0.5"
 tree-sitter-md = "0.5"
 signal-hook = "0.3"
 libc = "0.2"
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
+portable-pty = "0.9"
+vt100 = "0.18"
 
 [[bench]]
 name = "large_file"

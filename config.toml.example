@@ -16,3 +16,12 @@ theme = "dark"
 # [languages.py]
 # command = []
 # language_id = "python"
+
+# Override a formatter or linter by file extension. Commands run without a shell.
+# {file} expands to the open file path; stdin=true passes the unsaved buffer.
+# [tools.py.formatter]
+# command = ["ruff", "format", "-"]
+# stdin = true
+# [tools.py.linter]
+# command = ["ruff", "check", "--output-format", "concise", "--stdin-filename", "{file}", "-"]
+# stdin = true

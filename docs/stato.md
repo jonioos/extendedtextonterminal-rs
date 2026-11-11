@@ -1,6 +1,6 @@
 # Stato ETOT-RS
 
-Aggiornato il 10 novembre 2026. `target/release/etot` è un eseguibile Rust autonomo; `/usr/bin/etot` usa ancora la precedente implementazione.
+Aggiornato l'11 novembre 2026. `target/release/etot` è un eseguibile Rust autonomo; `/usr/bin/etot` usa ancora la precedente implementazione.
 
 ## Implementato
 
@@ -10,11 +10,12 @@ Aggiornato il 10 novembre 2026. `target/release/etot` è un eseguibile Rust auto
 - Tree-sitter integrato anche per Go, C# e VB.NET; adattatori LSP preconfigurati per Python, Go, C/C++, HTML/CSS, C# e VB.NET (server esterni richiesti); explorer, fuzzy finder, quickfix, Git e shell.
 - Avvio LSP in background, sincronizzazione differita, evidenziazione differita e limitata a 256 KiB, ricerca con memoria costante, undo limitato a 32 MiB e dimensioni terminale tramite ioctl.
 - Salvataggio atomico, controllo delle modifiche esterne, modalità read-only, configurazione TOML e opzioni `ignorecase`/`smartcase`, `autoindent` e `shiftwidth`.
+- `$undo`/`$redo`, registri clipboard `+`/`*`, journal atomico per recupero e undo persistente dei file nominati, sessioni con buffer/tab/split, `:Format`/`:Lint` con tool esterni configurabili e terminale PTY in pannello.
 
 ## Mancante
 
-- Compatibilità Vim completa, compresi regex e altri registri speciali, comandi Ex avanzati e semantica degli operatori nei casi limite.
-- Snippet, LSP avanzato e code action multifile, debugger, terminale in pannello, sessioni e sistema plugin.
-- Buffer efficiente per file molto grandi, recovery, copertura Unicode e test di compatibilità estesi.
+- Compatibilità Vimscript completa: linguaggio, funzioni, autocmd, mappe, API e plugin Vimscript non sono implementati. Mancano anche regex Vim completa, registri speciali, Ex avanzato e semantica degli operatori nei casi limite.
+- Snippet, LSP avanzato e code action multifile, debugger e sistema plugin. C#/VB.NET usano ancora la formattazione LSP, senza formatter/linter esterni predefiniti.
+- Buffer efficiente per file molto grandi, recovery dei file cambiati esternamente, copertura Unicode e test di compatibilità estesi.
 
 La compatibilità VIM completa e gli strumenti IDE avanzati richiedono ancora lavoro.

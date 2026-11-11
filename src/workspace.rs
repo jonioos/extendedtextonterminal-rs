@@ -1,12 +1,14 @@
 //! Multiple open buffers with independent undo and save state.
 use crate::commands::CommandHint;
 use crate::lsp::TextEdit;
+use crate::state;
 use crate::{Editor, Key, Mode};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SplitAxis {
     Vertical,
     Horizontal,
@@ -31,11 +33,12 @@ pub struct Divider {
     pub axis: SplitAxis,
     pub rect: Rect,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct Window {
     buffer: usize,
     cursor: (usize, usize),
 }
+#[derive(Clone, Serialize, Deserialize)]
 enum LayoutNode {
     Leaf(usize),
     Split {
@@ -43,6 +46,26 @@ enum LayoutNode {
         first: Box<LayoutNode>,
         second: Box<LayoutNode>,
     },
+}
+
+#[derive(Serialize, Deserialize)]
+struct SessionBuffer {
+    path: Option<PathBuf>,
+    readonly: bool,
+    row: usize,
+    col: usize,
+    scratch_lines: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Session {
+    version: u8,
+    buffers: Vec<SessionBuffer>,
+    current: usize,
+    windows: BTreeMap<usize, Window>,
+    tabs: Vec<LayoutNode>,
+    active_tab: usize,
+    active_window: usize,
 }
 impl LayoutNode {
     fn window_ids(&self, out: &mut Vec<usize>) {
@@ -182,6 +205,7 @@ pub struct Workspace {
     window_prefix: bool,
     tab_prefix: bool,
     dollar_prefix: bool,
+    pub forced_quit: bool,
     pub quit: bool,
 }
 impl Workspace {
@@ -217,11 +241,133 @@ impl Workspace {
             window_prefix: false,
             tab_prefix: false,
             dollar_prefix: false,
+            forced_quit: false,
             quit: false,
         })
     }
     pub fn active(&self) -> &Editor {
         &self.buffers[self.current]
+    }
+    pub fn journal_signatures(&self) -> Vec<(u64, bool, Option<u64>)> {
+        self.buffers.iter().map(Editor::journal_signature).collect()
+    }
+    pub fn restore_journals(&mut self) -> io::Result<usize> {
+        let mut restored = 0;
+        for buffer in &mut self.buffers {
+            restored += usize::from(buffer.restore_journal()?);
+        }
+        Ok(restored)
+    }
+    pub fn persist_journals(&self) -> io::Result<()> {
+        for buffer in &self.buffers {
+            buffer.persist_journal()?;
+        }
+        Ok(())
+    }
+    pub fn save_session_to(&self, file: &std::path::Path) -> io::Result<()> {
+        self.persist_journals()?;
+        let buffers = self
+            .buffers
+            .iter()
+            .map(|buffer| {
+                Ok(SessionBuffer {
+                    path: buffer.path.as_deref().map(state::absolute).transpose()?,
+                    readonly: buffer.readonly,
+                    row: buffer.row,
+                    col: buffer.col,
+                    scratch_lines: buffer.path.is_none().then(|| buffer.lines.clone()),
+                })
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        state::write_atomic(
+            file,
+            &Session {
+                version: 1,
+                buffers,
+                current: self.current,
+                windows: self.windows.clone(),
+                tabs: self.tabs.clone(),
+                active_tab: self.active_tab,
+                active_window: self.active_window,
+            },
+        )
+    }
+    pub fn load_session_from(&mut self, file: &std::path::Path) -> io::Result<()> {
+        if self.buffers.iter().any(|buffer| buffer.modified) {
+            return Err(io::Error::other("save or discard modified buffers first"));
+        }
+        let session: Session = state::read(file)?;
+        if session.version != 1
+            || session.buffers.is_empty()
+            || session.tabs.is_empty()
+            || session.current >= session.buffers.len()
+            || session.active_tab >= session.tabs.len()
+            || !session.windows.contains_key(&session.active_window)
+            || session
+                .windows
+                .values()
+                .any(|window| window.buffer >= session.buffers.len())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid session",
+            ));
+        }
+        let mut active_ids = Vec::new();
+        session.tabs[session.active_tab].window_ids(&mut active_ids);
+        let mut all_ids = Vec::new();
+        for tab in &session.tabs {
+            tab.window_ids(&mut all_ids);
+        }
+        all_ids.sort_unstable();
+        let leaves = all_ids.len();
+        all_ids.dedup();
+        if !active_ids.contains(&session.active_window)
+            || leaves != all_ids.len()
+            || all_ids != session.windows.keys().copied().collect::<Vec<_>>()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid window layout",
+            ));
+        }
+        let mut buffers = Vec::with_capacity(session.buffers.len());
+        for saved in session.buffers {
+            let mut buffer = Editor::open(saved.path, saved.readonly)?;
+            if let Some(lines) = saved.scratch_lines {
+                buffer.lines = if lines.is_empty() {
+                    vec![String::new()]
+                } else {
+                    lines
+                };
+            }
+            buffer.restore_journal()?;
+            buffer.row = saved.row.min(buffer.lines.len() - 1);
+            buffer.col = saved.col.min(buffer.lines[buffer.row].chars().count());
+            buffers.push(buffer);
+        }
+        self.buffers = buffers;
+        self.windows = session.windows;
+        self.tabs = session.tabs;
+        self.active_tab = session.active_tab;
+        self.active_window = session.active_window;
+        self.current = self.windows[&self.active_window].buffer;
+        self.next_window = self.windows.keys().next_back().copied().unwrap_or(0) + 1;
+        self.window_prefix = false;
+        self.tab_prefix = false;
+        self.dollar_prefix = false;
+        self.active_mut().message = "Session restored".into();
+        Ok(())
+    }
+    pub fn discard_modified_journals(&self) -> io::Result<()> {
+        for buffer in &self.buffers {
+            if buffer.modified {
+                buffer.discard_journal()?;
+            } else {
+                buffer.persist_journal()?;
+            }
+        }
+        Ok(())
     }
     pub fn dollar_prefix_pending(&self) -> bool {
         self.dollar_prefix && self.active().mode == Mode::Normal
@@ -233,7 +379,12 @@ impl Workspace {
         if self.dollar_prefix {
             return Some(CommandHint {
                 title: "Comandi $",
-                choices: &[("$end", "salva ed esci"), ("$quit", "esci senza salvare")],
+                choices: &[
+                    ("$end", "salva ed esci"),
+                    ("$quit", "esci senza salvare"),
+                    ("$undo", "annulla modifica"),
+                    ("$redo", "ripristina modifica"),
+                ],
             });
         }
         if self.window_prefix {
@@ -622,6 +773,34 @@ impl Workspace {
     }
     fn command(&mut self, command: &str) -> bool {
         match command {
+            "SessionSave" | "SessionLoad" => {
+                let result = state::session_path().and_then(|file| {
+                    if command == "SessionSave" {
+                        self.save_session_to(&file)
+                    } else {
+                        self.load_session_from(&file)
+                    }
+                });
+                self.active_mut().message = match result {
+                    Ok(()) => format!("{command} complete"),
+                    Err(error) => format!("{command}: {error}"),
+                };
+                true
+            }
+            _ if command.starts_with("SessionSave ") || command.starts_with("SessionLoad ") => {
+                let (name, path) = command.split_once(' ').unwrap();
+                let path = PathBuf::from(path.trim());
+                let result = if name == "SessionSave" {
+                    self.save_session_to(&path)
+                } else {
+                    self.load_session_from(&path)
+                };
+                self.active_mut().message = match result {
+                    Ok(()) => format!("{name} complete"),
+                    Err(error) => format!("{name}: {error}"),
+                };
+                true
+            }
             "wa" | "wall" | "wqa" | "wqall" => {
                 match self.write_all() {
                     Ok(written) => {
@@ -757,6 +936,7 @@ impl Workspace {
                 true
             }
             "q!" | "quit!" | "$quit" => {
+                self.forced_quit = true;
                 self.quit = true;
                 true
             }
@@ -807,7 +987,7 @@ impl Workspace {
         if self.active().mode == Mode::Normal {
             if self.dollar_prefix {
                 self.dollar_prefix = false;
-                if matches!(key, Key::Char('e' | 'q')) {
+                if matches!(key, Key::Char('e' | 'q' | 'u' | 'r')) {
                     self.active_mut().mode = Mode::Command;
                     self.active_mut().prompt = format!(
                         "${}",
@@ -916,6 +1096,28 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn session_restores_buffers_tabs_and_window_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let one = dir.path().join("one.txt");
+        let two = dir.path().join("two.txt");
+        let session = dir.path().join("session.json");
+        std::fs::write(&one, "one\n").unwrap();
+        std::fs::write(&two, "two\n").unwrap();
+        let mut original = Workspace::open(Some(one.clone()), false).unwrap();
+        ex(&mut original, "vsplit");
+        ex(&mut original, &format!("tabnew {}", two.display()));
+        original.save_session_to(&session).unwrap();
+
+        let mut restored = Workspace::open(None, false).unwrap();
+        restored.load_session_from(&session).unwrap();
+        assert_eq!(restored.tab_count(), 2);
+        assert_eq!(restored.active().path.as_ref(), Some(&two));
+        restored.handle(Key::Char('g'));
+        restored.handle(Key::Char('T'));
+        assert_eq!(restored.window_count(), 2);
+        assert_eq!(restored.active().path.as_ref(), Some(&one));
+    }
     #[test]
     fn tabs_keep_separate_layouts_and_share_buffers() {
         let dir = tempfile::tempdir().unwrap();
@@ -1158,6 +1360,24 @@ mod tests {
         workspace.handle(Key::Enter);
         assert!(workspace.quit);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "aXbc\n");
+    }
+    #[test]
+    fn dollar_undo_redo_use_existing_history() {
+        let mut workspace = Workspace::open(None, false).unwrap();
+        for key in [Key::Char('i'), Key::Char('x'), Key::Esc] {
+            workspace.handle(key);
+        }
+        assert_eq!(workspace.active().lines[0], "x");
+        for key in "$undo".chars() {
+            workspace.handle(Key::Char(key));
+        }
+        workspace.handle(Key::Enter);
+        assert_eq!(workspace.active().lines[0], "");
+        for key in "$redo".chars() {
+            workspace.handle(Key::Char(key));
+        }
+        workspace.handle(Key::Enter);
+        assert_eq!(workspace.active().lines[0], "x");
     }
     #[test]
     fn switch_buffers_preserves_unsaved_state_and_undo() {

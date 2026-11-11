@@ -12,6 +12,19 @@ pub struct Config {
     pub editing: EditingOptions,
     pub keys: Keys,
     pub languages: HashMap<String, LanguageServer>,
+    pub tools: HashMap<String, LanguageTools>,
+}
+#[derive(Debug, Deserialize, Default, Clone)]
+#[serde(default)]
+pub struct ToolCommand {
+    pub command: Vec<String>,
+    pub stdin: bool,
+}
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct LanguageTools {
+    pub formatter: Option<ToolCommand>,
+    pub linter: Option<ToolCommand>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -61,6 +74,65 @@ pub struct LanguageServer {
     pub language_id: String,
 }
 impl Config {
+    pub fn formatter_for(&self, extension: &str) -> Option<ToolCommand> {
+        if let Some(custom) = self
+            .tools
+            .get(extension)
+            .and_then(|tools| tools.formatter.as_ref())
+        {
+            return (!custom.command.is_empty()).then(|| custom.clone());
+        }
+        let command: &[&str] = match extension {
+            "rs" => &["rustfmt", "--emit", "stdout"],
+            "py" => &["ruff", "format", "-"],
+            "go" => &["gofmt"],
+            "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" | "hxx" => &["clang-format"],
+            "js" | "jsx" | "ts" | "tsx" | "html" | "htm" | "css" => {
+                &["prettier", "--stdin-filepath", "{file}"]
+            }
+            _ => return None,
+        };
+        Some(ToolCommand {
+            command: command.iter().map(|part| (*part).into()).collect(),
+            stdin: true,
+        })
+    }
+    pub fn linter_for(&self, extension: &str) -> Option<ToolCommand> {
+        if let Some(custom) = self
+            .tools
+            .get(extension)
+            .and_then(|tools| tools.linter.as_ref())
+        {
+            return (!custom.command.is_empty()).then(|| custom.clone());
+        }
+        let (command, stdin): (&[&str], bool) = match extension {
+            "rs" => (&["cargo", "check", "--message-format=short"], false),
+            "py" => (
+                &[
+                    "ruff",
+                    "check",
+                    "--output-format",
+                    "concise",
+                    "--stdin-filename",
+                    "{file}",
+                    "-",
+                ],
+                true,
+            ),
+            "go" => (&["go", "vet", "{file}"], false),
+            "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" | "hxx" => {
+                (&["clang-tidy", "{file}", "--quiet"], false)
+            }
+            "js" | "jsx" | "ts" | "tsx" => {
+                (&["eslint", "--stdin", "--stdin-filename", "{file}"], true)
+            }
+            _ => return None,
+        };
+        Some(ToolCommand {
+            command: command.iter().map(|part| (*part).into()).collect(),
+            stdin,
+        })
+    }
     pub fn apply_set(&mut self, command: &str) -> Result<String, String> {
         let option = command.trim();
         match option {

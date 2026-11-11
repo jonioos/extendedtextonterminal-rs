@@ -1,7 +1,9 @@
 use etot_rs::{
     config::Config,
-    lsp::{Client, Diagnostic},
+    lsp::{Client, Diagnostic, TextEdit},
     syntax::{self, Span, Style},
+    terminal::TerminalPane,
+    tooling::{self, ToolOutput},
     vim_regex,
     workspace::{Rect, SplitAxis, Workspace},
     Key, Mode,
@@ -385,6 +387,8 @@ struct HintView {
 const EX_COMMANDS: &[(&str, &str)] = &[
     ("$end", "salva ed esci"),
     ("$quit", "esci senza salvare"),
+    ("$undo", "annulla modifica"),
+    ("$redo", "ripristina modifica"),
     ("w", "salva"),
     ("wa", "salva tutti"),
     ("wq", "salva ed esci"),
@@ -423,6 +427,10 @@ const EX_COMMANDS: &[(&str, &str)] = &[
     ("LspFormat", "formatta"),
     ("LspCodeActions", "correzioni"),
     ("LspRename", "rinomina"),
+    ("Format", "formatta file"),
+    ("Lint", "analizza file"),
+    ("SessionSave", "salva sessione"),
+    ("SessionLoad", "ripristina sessione"),
     ("terminal", "shell"),
     ("noh", "nascondi ricerca"),
 ];
@@ -751,6 +759,9 @@ impl Input {
             16 => Key::Ctrl('p'),
             14 => Key::Ctrl('n'),
             18 => Key::Ctrl('r'),
+            3 => Key::Ctrl('c'),
+            26 => Key::Ctrl('z'),
+            28 => Key::Ctrl('\\'),
             22 => Key::Ctrl('v'),
             23 => Key::Ctrl('w'),
             15 => Key::Ctrl('o'),
@@ -803,6 +814,30 @@ impl Input {
         }))
     }
 }
+fn terminal_panel_size(height: usize, width: usize) -> Option<(u16, u16)> {
+    (height >= 12 && width >= 24).then(|| {
+        (
+            (height / 3).max(4).min(height - 8).min(u16::MAX as usize) as u16,
+            width.saturating_sub(4).min(u16::MAX as usize) as u16,
+        )
+    })
+}
+fn append_terminal_panel(
+    out: &mut String,
+    terminal: &TerminalPane,
+    height: usize,
+    width: usize,
+) -> (usize, usize) {
+    let (rows, cols) = terminal_panel_size(height, width).unwrap();
+    let top = height - usize::from(rows) - 2;
+    out.push_str(&format!("\x1b[{top};1H\x1b[48;2;26;28;42m\x1b[38;2;125;207;255m╭ Terminale · Ctrl+\\ chiudi {}╮\x1b[0m", "─".repeat(width.saturating_sub(29))));
+    for (index, line) in terminal.screen().rows_formatted(0, cols).enumerate() {
+        let y = top + index + 1;
+        out.push_str(&format!("\x1b[{y};1H\x1b[48;2;26;28;42m\x1b[38;2;125;207;255m│ \x1b[0m{line}\x1b[0m\x1b[{y};{}H\x1b[38;2;125;207;255m│\x1b[0m", width - 1));
+    }
+    let (row, col) = terminal.screen().cursor_position();
+    (top + usize::from(row) + 1, usize::from(col) + 3)
+}
 fn draw(
     workspace: &Workspace,
     viewport: &mut ViewportState,
@@ -810,9 +845,17 @@ fn draw(
     config: &Config,
     diagnostics: &[Diagnostic],
     syntax_spans: &[Vec<Span>],
+    terminal: Option<&TerminalPane>,
 ) -> io::Result<()> {
     if workspace.window_count() > 1 {
-        return draw_split(workspace, viewport, pane_syntax, config, diagnostics);
+        return draw_split(
+            workspace,
+            viewport,
+            pane_syntax,
+            config,
+            diagnostics,
+            terminal,
+        );
     }
     let top = &mut viewport.top;
     let left = &mut viewport.left;
@@ -1046,6 +1089,9 @@ fn draw(
     let (cursor_row, cursor_col) = append_command_popup(&mut out, workspace, config, width, height)
         .unwrap_or((cursor_row, cursor_col));
     append_completion_popup(&mut out, editor, width, height, (cursor_row, cursor_col));
+    let (cursor_row, cursor_col) = terminal
+        .map(|terminal| append_terminal_panel(&mut out, terminal, height, width))
+        .unwrap_or((cursor_row, cursor_col));
     out.push_str(&format!(
         "\x1b[{cursor_row};{cursor_col}H{}\x1b[?25h\x1b[?2026l",
         cursor_shape(editor.mode)
@@ -1208,6 +1254,7 @@ fn draw_split(
     syntax_cache: &mut HashMap<usize, SyntaxCacheEntry>,
     config: &Config,
     diagnostics: &[Diagnostic],
+    terminal: Option<&TerminalPane>,
 ) -> io::Result<()> {
     let (height, width) = size();
     let (panes, dividers) = workspace.panes(Rect {
@@ -1418,6 +1465,9 @@ fn draw_split(
     append_hint_overlay(&mut out, workspace, config, width, height);
     cursor = append_command_popup(&mut out, workspace, config, width, height).unwrap_or(cursor);
     append_completion_popup(&mut out, editor, width, height, cursor);
+    cursor = terminal
+        .map(|terminal| append_terminal_panel(&mut out, terminal, height, width))
+        .unwrap_or(cursor);
     out.push_str(&format!(
         "\x1b[{};{}H{}\x1b[?25h\x1b[?2026l",
         cursor.0.min(height),
@@ -1438,7 +1488,7 @@ fn run() -> io::Result<()> {
                 return Ok(());
             }
             "--help" | "-h" => {
-                println!("etot [--edit|--read] [file|directory]\nNormal: i/I/a/A insert, Esc normal, ? or / search, Ctrl+P files\nVim: . repeat, \"a register, qa/@a macro, Ctrl+w windows, gt/gT tabs\nCommands: :w :wa :q :q! :wq :e FILE :bn :bp :buffers :bd :split :vsplit :tabnew :tabnext :tabprevious :tabclose :grep PATTERN :GitStatus :GitDiff :!COMMAND :terminal\nLSP: gd definition, gr references, K hover, Ctrl+Space completion\nLSP commands: :LspDiagnostics :LspFormat :LspSymbols :LspCodeActions :LspRename NAME");
+                println!("etot [--edit|--read] [file|directory]\nNormal: i/I/a/A insert, Esc normal, ? or / search, Ctrl+P files\nVim: . repeat, \"a register, \"+ clipboard, qa/@a macro, Ctrl+w windows, gt/gT tabs\nCommands: :w :wa :q :q! :wq $end $quit $undo $redo :e FILE :bn :bp :buffers :bd :split :vsplit :tabnew :tabnext :tabprevious :tabclose :grep PATTERN :Format :Lint :SessionSave :SessionLoad :GitStatus :GitDiff :!COMMAND :terminal\nTerminal panel: Ctrl+\\ closes\nLSP: gd definition, gr references, K hover, Ctrl+Space completion\nLSP commands: :LspDiagnostics :LspFormat :LspSymbols :LspCodeActions :LspRename NAME");
                 return Ok(());
             }
             "--read" => readonly = true,
@@ -1460,6 +1510,9 @@ fn run() -> io::Result<()> {
     }
     let mut config = Config::load()?;
     let mut workspace = Workspace::open(path, readonly)?;
+    if let Err(error) = workspace.restore_journals() {
+        workspace.active_mut().message = format!("Recovery: {error}");
+    }
     if edit && workspace.active().mode != Mode::Explorer {
         workspace.active_mut().begin_insert()
     }
@@ -1477,17 +1530,22 @@ fn run() -> io::Result<()> {
     let mut viewport = ViewportState::default();
     let mut pane_syntax: HashMap<usize, SyntaxCacheEntry> = HashMap::new();
     let mut input = Input::default();
+    let mut terminal_panel: Option<TerminalPane> = None;
     let mut ex_completion: Option<(String, usize, String)> = None;
     let mut lsp_path: Option<std::path::PathBuf> = None;
     let mut lsp_revision = 0;
     let mut lsp: Option<Client> = None;
     let mut lsp_pending: Option<Receiver<(PathBuf, u64, io::Result<Client>)>> = None;
+    let mut tool_pending: Option<Receiver<(bool, PathBuf, u64, PathBuf, io::Result<ToolOutput>)>> =
+        None;
     let mut lsp_seen_revision = workspace.active().revision;
     let mut lsp_changed_at: Option<Instant> = None;
     let mut syntax_path: Option<std::path::PathBuf> = None;
     let mut syntax_revision = u64::MAX;
     let mut syntax_spans: Vec<Vec<Span>> = Vec::new();
     let mut syntax_pending_since: Option<Instant> = None;
+    let mut journal_seen = workspace.journal_signatures();
+    let mut journal_changed_at: Option<Instant> = None;
     let mut redraw = true;
     while !workspace.quit {
         workspace.configure_options(
@@ -1501,6 +1559,36 @@ fn run() -> io::Result<()> {
         }
         if resized.swap(false, Ordering::Relaxed) {
             redraw = true;
+        }
+        let (height, width) = size();
+        if terminal_panel.is_some() && terminal_panel_size(height, width).is_none() {
+            terminal_panel = None;
+            workspace.active_mut().message = "Terminal closed: screen too small".into();
+            redraw = true;
+        }
+        if let Some(terminal) = terminal_panel.as_mut() {
+            let (rows, cols) = terminal_panel_size(height, width).unwrap();
+            terminal.resize(rows, cols)?;
+            if terminal.poll() {
+                redraw = true;
+            }
+            if terminal.exited()? {
+                terminal_panel = None;
+                workspace.active_mut().message = "Terminal exited".into();
+                redraw = true;
+            }
+        }
+        let journal_now = workspace.journal_signatures();
+        if journal_now != journal_seen {
+            journal_seen = journal_now;
+            journal_changed_at = Some(Instant::now());
+        }
+        if journal_changed_at.is_some_and(|at| at.elapsed() >= Duration::from_millis(900)) {
+            if let Err(error) = workspace.persist_journals() {
+                workspace.active_mut().message = format!("Recovery: {error}");
+                redraw = true;
+            }
+            journal_changed_at = None;
         }
         let current_path = workspace.active().path.clone();
         if current_path != lsp_path {
@@ -1557,6 +1645,74 @@ fn run() -> io::Result<()> {
                     }
                 }
                 Err(TryRecvError::Disconnected) => lsp_pending = None,
+                Err(TryRecvError::Empty) => (),
+            }
+        }
+        if let Some(result) = tool_pending.as_ref().map(Receiver::try_recv) {
+            match result {
+                Ok((formatting, path, revision, cwd, result)) => {
+                    tool_pending = None;
+                    if workspace.active().path.as_ref() == Some(&path)
+                        && workspace.active().revision == revision
+                    {
+                        match result {
+                            Ok(output) if formatting && output.success => {
+                                let editor = workspace.active_mut();
+                                let before = editor.content();
+                                if before == output.stdout {
+                                    editor.message = "Already formatted".into();
+                                } else {
+                                    let end = if before.ends_with('\n') {
+                                        (editor.lines.len(), 0)
+                                    } else {
+                                        (
+                                            editor.lines.len() - 1,
+                                            editor.lines.last().unwrap().encode_utf16().count(),
+                                        )
+                                    };
+                                    let edit = TextEdit {
+                                        start: (0, 0),
+                                        end,
+                                        new_text: output.stdout,
+                                    };
+                                    editor.message = match editor.apply_lsp_edits(&[edit]) {
+                                        Ok(_) => "Formatted buffer; save to write".into(),
+                                        Err(error) => format!("Format: {error}"),
+                                    };
+                                }
+                            }
+                            Ok(output) if formatting => {
+                                workspace.active_mut().message = format!(
+                                    "Format: {}",
+                                    output.stderr.lines().next().unwrap_or("formatter failed")
+                                );
+                            }
+                            Ok(output) => {
+                                let entries = tooling::diagnostics(&output, &path, &cwd);
+                                if entries.is_empty() {
+                                    workspace.active_mut().message = if output.success {
+                                        "Lint clean".into()
+                                    } else {
+                                        format!(
+                                            "Lint: {}",
+                                            output
+                                                .stderr
+                                                .lines()
+                                                .chain(output.stdout.lines())
+                                                .next()
+                                                .unwrap_or("linter failed")
+                                        )
+                                    };
+                                } else {
+                                    workspace.active_mut().show_quickfix(entries, "lint");
+                                }
+                            }
+                            Err(error) => workspace.active_mut().message = format!("Tool: {error}"),
+                        }
+                        redraw = true;
+                    }
+                }
+                Err(TryRecvError::Disconnected) => tool_pending = None,
                 Err(TryRecvError::Empty) => (),
             }
         }
@@ -1626,6 +1782,7 @@ fn run() -> io::Result<()> {
                 &config,
                 diagnostics,
                 &syntax_spans,
+                terminal_panel.as_ref(),
             )?;
             let (height, width) = size();
             let viewport = if workspace.window_count() > 1 {
@@ -1655,6 +1812,20 @@ fn run() -> io::Result<()> {
             continue;
         };
         redraw = true;
+        if let Some(terminal) = terminal_panel.as_mut() {
+            if key == Key::Ctrl('\\') {
+                terminal_panel = None;
+                workspace.active_mut().message = "Terminal closed".into();
+            } else if let Err(error) = terminal.send(key) {
+                workspace.active_mut().message = format!("Terminal: {error}");
+                terminal_panel = None;
+            }
+            continue;
+        }
+        if key == Key::Ctrl('c') {
+            workspace.handle(Key::Esc);
+            continue;
+        }
         if workspace.active().mode == Mode::Command && key == Key::Ctrl('i') {
             let current = workspace.active().prompt.clone();
             let (prefix, next) = match ex_completion.take() {
@@ -1671,6 +1842,59 @@ fn run() -> io::Result<()> {
         }
         if key == Key::Enter && workspace.active().mode == Mode::Command {
             let prompt = workspace.active().prompt.trim().to_owned();
+            if prompt == "Format" || prompt == "Lint" {
+                let formatting = prompt == "Format";
+                let editor = workspace.active_mut();
+                editor.mode = Mode::Normal;
+                editor.prompt.clear();
+                if tool_pending.is_some() {
+                    editor.message = "A formatter or linter is already running".into();
+                    continue;
+                }
+                if formatting && editor.readonly {
+                    editor.message = "Read-only buffer".into();
+                    continue;
+                }
+                let Some(path) = editor.path.clone() else {
+                    editor.message = "Open a named file first".into();
+                    continue;
+                };
+                let extension = path
+                    .extension()
+                    .and_then(|part| part.to_str())
+                    .unwrap_or("");
+                let spec = if formatting {
+                    config.formatter_for(extension)
+                } else {
+                    config.linter_for(extension)
+                };
+                let Some(spec) = spec else {
+                    editor.message = format!(
+                        "No {} configured for .{extension}",
+                        if formatting { "formatter" } else { "linter" }
+                    );
+                    continue;
+                };
+                let cwd = editor
+                    .project_root_path()
+                    .or_else(|| path.parent())
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .to_path_buf();
+                let revision = editor.revision;
+                let content = editor.content();
+                editor.message = if formatting {
+                    "Formatting...".into()
+                } else {
+                    "Linting...".into()
+                };
+                let (sender, receiver) = mpsc::channel();
+                std::thread::spawn(move || {
+                    let result = tooling::run(&spec, &path, &cwd, &content);
+                    let _ = sender.send((formatting, path, revision, cwd, result));
+                });
+                tool_pending = Some(receiver);
+                continue;
+            }
             if prompt == "set" || prompt.starts_with("set ") {
                 let option = prompt.strip_prefix("set").unwrap().trim();
                 let result = config.apply_set(option);
@@ -1722,7 +1946,38 @@ fn run() -> io::Result<()> {
                 }
                 continue;
             }
-            if prompt == "terminal" || prompt.starts_with('!') {
+            if prompt == "terminal" {
+                let cwd = workspace
+                    .active()
+                    .project_root_path()
+                    .or_else(|| {
+                        workspace.active().path.as_deref().and_then(|path| {
+                            if path.is_dir() {
+                                Some(path)
+                            } else {
+                                path.parent()
+                            }
+                        })
+                    })
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .to_path_buf();
+                let editor = workspace.active_mut();
+                editor.mode = Mode::Normal;
+                editor.prompt.clear();
+                let (height, width) = size();
+                editor.message = match terminal_panel_size(height, width) {
+                    Some((rows, cols)) => match TerminalPane::start(rows, cols, &cwd) {
+                        Ok(panel) => {
+                            terminal_panel = Some(panel);
+                            "Terminal opened".into()
+                        }
+                        Err(error) => format!("Terminal: {error}"),
+                    },
+                    None => "Terminal needs at least 24x12 cells".into(),
+                };
+                continue;
+            }
+            if prompt.starts_with('!') {
                 let editor = workspace.active_mut();
                 editor.mode = Mode::Normal;
                 editor.prompt.clear();
@@ -1927,6 +2182,11 @@ fn run() -> io::Result<()> {
                 workspace.active_mut().message = "No language server for this file".into()
             }
         }
+    }
+    if workspace.forced_quit {
+        workspace.discard_modified_journals()?;
+    } else {
+        workspace.persist_journals()?;
     }
     Ok(())
 }

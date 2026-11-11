@@ -1,13 +1,18 @@
+pub mod clipboard;
 pub mod commands;
 pub mod config;
 pub mod git;
 pub mod lsp;
+pub mod state;
 pub mod syntax;
+pub mod terminal;
+pub mod tooling;
 pub mod workspace;
 use commands::{Action, CommandEngine, CommandHint, Motion, Operator};
 use git::ChangedFile;
 use lsp::{CodeAction, TextEdit};
 use regex::{Regex, RegexBuilder};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -74,6 +79,50 @@ struct StoredRegister {
     lines: Vec<String>,
     linewise: bool,
     blockwise: bool,
+}
+#[derive(Deserialize)]
+struct BufferJournal {
+    version: u8,
+    path: PathBuf,
+    disk_hash: Option<u64>,
+    lines: Vec<String>,
+    row: usize,
+    col: usize,
+    trailing_newline: bool,
+    modified: bool,
+    undo: Vec<(Vec<String>, usize, usize, bool)>,
+    redo: Vec<(Vec<String>, usize, usize, bool)>,
+}
+#[derive(Serialize)]
+struct BufferJournalView<'a> {
+    version: u8,
+    path: PathBuf,
+    disk_hash: Option<u64>,
+    lines: &'a [String],
+    row: usize,
+    col: usize,
+    trailing_newline: bool,
+    modified: bool,
+    undo: &'a [(Vec<String>, usize, usize, bool)],
+    redo: &'a [(Vec<String>, usize, usize, bool)],
+}
+impl StoredRegister {
+    fn text(&self) -> String {
+        let mut text = self.lines.join("\n");
+        if self.linewise {
+            text.push('\n');
+        }
+        text
+    }
+    fn from_text(text: &str) -> Self {
+        let linewise = text.ends_with('\n');
+        let content = text.strip_suffix('\n').unwrap_or(text);
+        Self {
+            lines: content.split('\n').map(str::to_owned).collect(),
+            linewise,
+            blockwise: false,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -152,6 +201,91 @@ pub struct Editor {
 }
 
 impl Editor {
+    pub fn persist_journal(&self) -> io::Result<()> {
+        let Some(path) = self.path.as_ref().filter(|path| !path.is_dir()) else {
+            return Ok(());
+        };
+        self.persist_journal_at(&state::buffer_path(path)?)
+    }
+    fn persist_journal_at(&self, file: &std::path::Path) -> io::Result<()> {
+        let Some(path) = self.path.as_ref() else {
+            return Ok(());
+        };
+        let journal = BufferJournalView {
+            version: 1,
+            path: state::absolute(path)?,
+            disk_hash: self.disk_hash,
+            lines: &self.lines,
+            row: self.row,
+            col: self.col,
+            trailing_newline: self.trailing_newline,
+            modified: self.modified,
+            undo: &self.undo,
+            redo: &self.redo,
+        };
+        state::write_atomic(file, &journal)
+    }
+    pub fn restore_journal(&mut self) -> io::Result<bool> {
+        let Some(path) = self.path.as_ref().filter(|path| !path.is_dir()) else {
+            return Ok(false);
+        };
+        self.restore_journal_at(&state::buffer_path(path)?)
+    }
+    fn restore_journal_at(&mut self, file: &std::path::Path) -> io::Result<bool> {
+        let Some(path) = self.path.as_ref() else {
+            return Ok(false);
+        };
+        let journal: BufferJournal = match state::read(file) {
+            Ok(journal) => journal,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if journal.version != 1 || journal.path != state::absolute(path)? {
+            return Ok(false);
+        }
+        if journal.disk_hash != self.disk_hash {
+            self.message = "Recovery available, but file changed on disk".into();
+            return Ok(false);
+        }
+        if journal.lines.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "empty recovery buffer",
+            ));
+        }
+        self.lines = journal.lines;
+        self.row = journal.row.min(self.lines.len() - 1);
+        self.col = journal.col;
+        self.trailing_newline = journal.trailing_newline;
+        self.modified = journal.modified;
+        self.undo = journal.undo;
+        self.undo_bytes = self
+            .undo
+            .iter()
+            .flat_map(|state| &state.0)
+            .map(String::len)
+            .sum();
+        self.redo = journal.redo;
+        self.clamp();
+        if self.modified {
+            self.message = "Recovered unsaved changes".into();
+            self.revision = self.revision.wrapping_add(1);
+        }
+        Ok(true)
+    }
+    pub fn discard_journal(&self) -> io::Result<()> {
+        let Some(path) = self.path.as_ref() else {
+            return Ok(());
+        };
+        match fs::remove_file(state::buffer_path(path)?) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+    pub fn journal_signature(&self) -> (u64, bool, Option<u64>) {
+        (self.revision, self.modified, self.disk_hash)
+    }
     pub fn search_case_insensitive(&self, pattern: &str) -> bool {
         if !self.ignorecase {
             return false;
@@ -1514,6 +1648,8 @@ impl Editor {
             return;
         }
         match command.as_str() {
+            "$undo" => self.undo(false),
+            "$redo" => self.undo(true),
             "w" | "write" => {
                 if let Err(e) = self.save() {
                     self.message = e.to_string()
@@ -2178,6 +2314,13 @@ impl Editor {
         }
         let Some(name) = selected else { return };
         if name == '"' {
+            return;
+        }
+        if matches!(name, '+' | '*') {
+            if let Err(error) = clipboard::copy(&new.text()) {
+                self.message = format!("Clipboard: {error}");
+            }
+            self.named_registers.insert(name, new);
             return;
         }
         let key = name.to_ascii_lowercase();
@@ -2875,6 +3018,13 @@ impl Editor {
                         linewise: self.register_linewise,
                         blockwise: self.register_blockwise,
                     },
+                    Some('+' | '*') => match clipboard::paste() {
+                        Ok(text) => StoredRegister::from_text(&text),
+                        Err(error) => {
+                            self.message = format!("Clipboard: {error}");
+                            return;
+                        }
+                    },
                     Some(name) => self
                         .named_registers
                         .get(&name.to_ascii_lowercase())
@@ -2951,7 +3101,7 @@ impl Editor {
             }
             Action::Repeat(count) => self.repeat_last(count),
             Action::SelectRegister(name) => {
-                if name.is_ascii_alphanumeric() || matches!(name, '"' | '-' | '_') {
+                if name.is_ascii_alphanumeric() || matches!(name, '"' | '-' | '_' | '+' | '*') {
                     self.active_register = Some(name);
                 } else {
                     self.message = format!("Unsupported register: {name}");
@@ -3638,6 +3788,41 @@ fn hash_bytes(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn journal_recovers_unsaved_text_and_persistent_undo() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("draft.txt");
+        let journal = dir.path().join("journal.json");
+        fs::write(&file, "before\n").unwrap();
+        let mut edited = Editor::open(Some(file.clone()), false).unwrap();
+        for key in [Key::Char('i'), Key::Char('X'), Key::Esc] {
+            edited.handle(key);
+        }
+        edited.persist_journal_at(&journal).unwrap();
+        let mut reopened = Editor::open(Some(file.clone()), false).unwrap();
+        assert!(reopened.restore_journal_at(&journal).unwrap());
+        assert_eq!(reopened.lines[0], "Xbefore");
+        assert!(reopened.modified);
+        reopened.handle(Key::Char('u'));
+        assert_eq!(reopened.lines[0], "before");
+        reopened.handle(Key::Ctrl('r'));
+        assert_eq!(reopened.lines[0], "Xbefore");
+
+        fs::write(&file, "external\n").unwrap();
+        let mut changed = Editor::open(Some(file), false).unwrap();
+        assert!(!changed.restore_journal_at(&journal).unwrap());
+        assert_eq!(changed.lines[0], "external");
+    }
+    #[test]
+    fn clipboard_register_preserves_linewise_text() {
+        let register = StoredRegister::from_text("first\nsecond\n");
+        assert!(register.linewise);
+        assert_eq!(register.lines, ["first", "second"]);
+        assert_eq!(register.text(), "first\nsecond\n");
+        let chars = StoredRegister::from_text("one\ntwo");
+        assert!(!chars.linewise);
+        assert_eq!(chars.text(), "one\ntwo");
+    }
     #[test]
     fn local_marks_and_jump_history() {
         let mut e = Editor::open(None, false).unwrap();
