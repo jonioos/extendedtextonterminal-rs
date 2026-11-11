@@ -28,7 +28,7 @@ cd extendedtextonterminal-rs
 ~/usr/bin/etot --edit app.rs
 ```
 
-Lo script installa il solo eseguibile in `~/usr/bin/etot`. Per scegliere un altro percorso assoluto: `ETOT_INSTALL_PATH=/percorso/etot ./scripts/install-etot`. In alternativa, esegui `./target/release/etot`. Se `~/usr/bin` è nel `PATH`, basta digitare `etot`.
+Lo script installa l'eseguibile in `~/usr/bin/etot` e, se `~/.local/bin` è nel `PATH`, crea un collegamento per avviarlo con `etot`. Installa anche [MesloLGS NF](https://github.com/romkatv/powerlevel10k/blob/master/font.md) per le icone: seleziona **MesloLGS NF** nelle impostazioni del font del terminale. Per saltare i font: `ETOT_INSTALL_FONT=0 ./scripts/install-etot`. Per scegliere un altro percorso dell'eseguibile: `ETOT_INSTALL_PATH=/percorso/etot ./scripts/install-etot`.
 
 | Avvio | Effetto |
 | --- | --- |
@@ -46,7 +46,8 @@ Lo script installa il solo eseguibile in `~/usr/bin/etot`. Per scegliere un altr
 - **Editing modale:** Normal, Insert, Visual, Visual Line, Visual Block, Replace e Cmdline. Il cursore passa da blocco a barra in Insert nei terminali che supportano il cambio di forma.
 - **Editing VIM COMPATIBLE:** conteggi, movimenti, operatori `d/c/y`, text object, indentazione, registri, macro, marks, ripetizione con `.`, undo/redo, ricerca e sostituzione Ex.
 - **Lavoro su più file:** buffer, split orizzontali e verticali, tab, esploratore, file picker e ricerca nel progetto.
-- **Interfaccia:** tema scuro o chiaro, colori sintattici Tree-sitter, statusline, menu contestuali, suggerimenti nella Cmdline e quickfix. Le etichette sono leggibili anche con MesloLGS.
+- **Interfaccia:** tema scuro o chiaro, colori sintattici Tree-sitter, statusline nell'ultima riga con icone MesloLGS NF e ora dell'ultimo salvataggio, menu contestuali, suggerimenti nella Cmdline e quickfix.
+- **Inserimento assistito:** digitando `datetime` o `timeHMS` in Insert appare la data/ora locale; `Invio` sostituisce la parola con il valore suggerito.
 - **Strumenti di sviluppo:** client LSP, formatter e linter esterni configurabili, Git status/diff/staging e shell interattiva in un pannello inferiore.
 - **Continuità del lavoro:** sessioni salvate su richiesta, recupero automatico delle modifiche non salvate dei file nominati e undo persistente; salvataggio atomico con controllo delle modifiche esterne.
 
@@ -60,7 +61,8 @@ In **Normal**, i tasti agiscono sul testo. `:` apre la **Cmdline**; `Tab` comple
 | --- | --- |
 | `h j k l` oppure frecce | Sinistra, giù, su, destra. |
 | `w W b B e E` | Navigazione per parole e WORD. |
-| `0 ^ $` | Inizio riga, primo carattere non vuoto, fine riga. |
+| `0 ^` | Inizio riga e primo carattere non vuoto. |
+| `Inizio` / `Fine`, `PagSu` / `PagGiù` | Inizio/fine riga e schermata precedente/successiva. `Fine` sostituisce il movimento `$` in Normal. |
 | `gg G`, `42G` | Inizio/fine file, riga indicata. |
 | `{ }`, `%`, `H M L` | Paragrafi, parentesi corrispondente, posizione nella finestra. |
 | `f F t T` + carattere, `;` / `,` | Trova un carattere nella riga e ripete la ricerca. |
@@ -84,20 +86,22 @@ I conteggi si combinano con molti comandi: `5j` scende di cinque righe, `3w` ava
 | `qa` … `q`, `@a`, `@@` | Registra una macro nel registro `a`, la riproduce o ripete l'ultima. |
 | `ma`, `'a` / `` `a `` | Imposta e raggiunge un mark locale. |
 | `Canc` | Elimina la selezione Visual; in Normal equivale a `x`. |
+| `$copy` in Visual + `Invio` | Copia la selezione nel registro e nella clipboard di sistema. |
 
 I registri includono quelli nominati e una parte dei registri speciali (`0`, `1–9`, `-`, `_`). La clipboard richiede una sessione grafica che la renda disponibile.
 
 ### Comandi ETOT e file
 
-I quattro comandi `$` si possono scrivere nella Cmdline come `:$undo` oppure digitare direttamente in Normal come `$undo` e confermare con `Invio`. Un singolo `$` continua a portare il cursore a fine riga.
+I comandi `$` si possono scrivere nella Cmdline come `:$undo` oppure digitare direttamente in Normal come `$undo` e confermare con `Invio`. `$` apre i suggerimenti dei comandi ETOT; per andare a fine riga usa **Fine**.
 
 | Comando | Azione |
 | --- | --- |
 | `$undo` / `$redo` | Annulla o ripristina una modifica. |
 | `$end` | Salva il buffer attivo e chiude quando non restano modifiche non salvate. |
-| `$quit` | Esce senza salvare e scarta il recupero delle modifiche non salvate. |
+| `$end file.txt` | Salva un buffer senza nome in `file.txt`; con un file già aperto crea una copia. Se il nome esiste, scegli sovrascrittura, copia con indice o annulla e torna alla Cmdline. |
+| `$quit` | Chiede se salvare le modifiche, scartarle o annullare l'uscita. |
 | `:w`, `:wa`, `:wq` | Salva il file, tutti i buffer modificati, oppure salva ed esci. |
-| `:q`, `:q!` | Esce, oppure forza l'uscita senza salvare. |
+| `:q`, `:q!` | Esce con conferma se ci sono modifiche, oppure forza l'uscita senza salvare. Un buffer senza nome viene proposto come `Untitled`. |
 | `:e file`, `:bn`, `:bp`, `:buffers`, `:bd` | Apre e gestisce i buffer. |
 | `:split [file]`, `:vsplit [file]`, `Ctrl+W s/v` | Divide la finestra. |
 | `Ctrl+W h/j/k/l`, `Ctrl+W c` | Cambia o chiude lo split. |

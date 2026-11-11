@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod commands;
 pub mod config;
+pub mod datetime;
 pub mod git;
 pub mod lsp;
 pub mod state;
@@ -18,6 +19,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -51,6 +53,10 @@ pub enum Key {
     Down,
     Left,
     Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
     Ctrl(char),
 }
 #[derive(Debug, Clone, Copy)]
@@ -142,6 +148,7 @@ pub struct Editor {
     search_before: Option<(String, bool)>,
     highlight_before: bool,
     pub modified: bool,
+    pub last_saved_at: Option<SystemTime>,
     pub revision: u64,
     pub readonly: bool,
     pub ignorecase: bool,
@@ -385,6 +392,9 @@ impl Editor {
             .as_ref()
             .is_none_or(|bytes| bytes.last() == Some(&b'\n'));
         let disk_hash = original.as_ref().map(|bytes| hash_bytes(bytes));
+        let last_saved_at = path
+            .as_ref()
+            .and_then(|path| fs::metadata(path).ok()?.modified().ok());
         let project_root = path.as_ref().and_then(|path| detect_project_root(path));
         let lines = match original {
             Some(bytes) => String::from_utf8(bytes)
@@ -414,6 +424,7 @@ impl Editor {
             search_before: None,
             highlight_before: false,
             modified: false,
+            last_saved_at,
             revision: 0,
             readonly,
             ignorecase: false,
@@ -877,6 +888,16 @@ impl Editor {
                 self.mode = self.completion_previous_mode;
                 (self.row, self.col) = self.completion_position
             }
+            Key::Char(c) if self.completion_previous_mode == Mode::Insert => {
+                self.mode = Mode::Insert;
+                (self.row, self.col) = self.completion_position;
+                self.insert(c);
+            }
+            Key::Backspace if self.completion_previous_mode == Mode::Insert => {
+                self.mode = Mode::Insert;
+                (self.row, self.col) = self.completion_position;
+                self.backspace();
+            }
             Key::Enter => {
                 let chosen = self.completion_items[self.completion_index].clone();
                 self.mode = self.completion_previous_mode;
@@ -1059,8 +1080,8 @@ impl Editor {
             Key::Char('j') | Key::Down => self.step(Motion::Down),
             Key::Char('k') | Key::Up => self.step(Motion::Up),
             Key::Char('l') | Key::Right => self.step(Motion::Right),
-            Key::Char('0') => self.step(Motion::Start),
-            Key::Char('$') => self.step(Motion::End),
+            Key::Char('0') | Key::Home => self.step(Motion::Start),
+            Key::End => self.step(Motion::End),
             Key::Char('w') => self.step(Motion::Word),
             Key::Char('b') => self.step(Motion::BackWord),
             _ => (),
@@ -1068,6 +1089,8 @@ impl Editor {
     }
     fn replace_key(&mut self, key: Key) {
         match key {
+            Key::Home => self.step(Motion::Start),
+            Key::End => self.step(Motion::End),
             Key::Esc => {
                 self.mode = Mode::Normal;
                 self.clamp()
@@ -1451,8 +1474,87 @@ impl Editor {
         }
         self.disk_hash = Some(hash_bytes(output.as_bytes()));
         self.modified = false;
+        self.last_saved_at = Some(SystemTime::now());
         self.message = format!("{} written", path.display());
         Ok(())
+    }
+    pub fn save_as(&mut self, target: &std::path::Path, overwrite: bool) -> io::Result<()> {
+        if self.readonly {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "file is read-only",
+            ));
+        }
+        let same_path = self.path.as_deref() == Some(target)
+            || self
+                .path
+                .as_deref()
+                .and_then(|path| path.canonicalize().ok())
+                .zip(target.canonicalize().ok())
+                .is_some_and(|(current, other)| current == other);
+        if same_path && !overwrite {
+            return self.save();
+        }
+        if fs::symlink_metadata(target).is_ok_and(|meta| meta.file_type().is_symlink()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "saving through a symlink is not supported",
+            ));
+        }
+        if !overwrite && target.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "target already exists",
+            ));
+        }
+        let parent = target
+            .parent()
+            .filter(|part| !part.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let content = self.content();
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        if let Ok(meta) = fs::metadata(target) {
+            if !meta.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "target is not a file",
+                ));
+            }
+            temporary.as_file().set_permissions(meta.permissions())?;
+        }
+        temporary.write_all(content.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        if overwrite {
+            temporary.persist(target).map_err(|error| error.error)?;
+        } else {
+            temporary
+                .persist_noclobber(target)
+                .map_err(|error| error.error)?;
+        }
+        if let Ok(directory) = fs::File::open(parent) {
+            let _ = directory.sync_all();
+        }
+        self.last_saved_at = Some(SystemTime::now());
+        if self.path.is_none() || same_path {
+            self.path = Some(target.to_path_buf());
+            self.disk_hash = Some(hash_bytes(content.as_bytes()));
+            self.project_root = detect_project_root(target);
+            self.modified = false;
+            self.message = format!("{} written", target.display());
+        } else {
+            self.message = format!("Copy saved to {}", target.display());
+        }
+        Ok(())
+    }
+    pub fn copy_visual_selection(&mut self) {
+        if matches!(
+            self.mode,
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        ) {
+            let previous_register = self.active_register.replace('+');
+            self.visual_action(Operator::Yank);
+            self.active_register = previous_register;
+        }
     }
     fn insert(&mut self, c: char) {
         let mut chars = self.chars();
@@ -1460,6 +1562,22 @@ impl Editor {
         self.lines[self.row] = chars.into_iter().collect();
         self.col += 1;
         self.mark_changed();
+        if matches!(c, 'e' | 'S') {
+            let prefix = self.lines[self.row]
+                .chars()
+                .take(self.col)
+                .collect::<Vec<_>>();
+            let mut word = prefix
+                .iter()
+                .rev()
+                .take_while(|ch| ch.is_alphanumeric() || **ch == '_')
+                .copied()
+                .collect::<Vec<_>>();
+            word.reverse();
+            if let Some(value) = datetime::suggestion(&word.into_iter().collect::<String>()) {
+                self.show_completions(vec![value]);
+            }
+        }
     }
     fn backspace(&mut self) {
         if self.col > 0 {
@@ -1655,14 +1773,14 @@ impl Editor {
                     self.message = e.to_string()
                 }
             }
-            "q" | "quit" => {
+            "q" | "quit" | "$quit" => {
                 if self.modified {
                     self.message = "No write since last change (:q! to quit)".into()
                 } else {
                     self.quit = true
                 }
             }
-            "q!" | "quit!" | "$quit" => self.quit = true,
+            "q!" | "quit!" => self.quit = true,
             "wq" | "x" | "$end" => {
                 if let Err(e) = self.save() {
                     self.message = e.to_string()
@@ -3248,6 +3366,8 @@ impl Editor {
             Key::Ctrl('i') => self.jump_history(true),
             Key::Left => self.step(Motion::Left),
             Key::Right => self.step(Motion::Right),
+            Key::Home => self.step(Motion::Start),
+            Key::End => self.step(Motion::End),
             Key::Down => {
                 if self.highlight && self.search.is_some() {
                     self.search_next(true)
@@ -3321,6 +3441,8 @@ impl Editor {
                 Key::Ctrl('d') if !self.readonly => self.insert_shift(false),
                 Key::Left => self.col = self.col.saturating_sub(1),
                 Key::Right => self.col = (self.col + 1).min(self.chars().len()),
+                Key::Home => self.col = 0,
+                Key::End => self.col = self.chars().len(),
                 Key::Up => self.move_vertical(false),
                 Key::Down => self.move_vertical(true),
                 Key::Ctrl(_) => (),
@@ -4983,5 +5105,22 @@ mod tests {
         assert_eq!(e.git_entries[0].status, "A ");
         e.handle(Key::Char('q'));
         assert_eq!(e.mode, Mode::Normal);
+    }
+    #[test]
+    fn datetime_completion_and_home_end_keys() {
+        let mut editor = Editor::open(None, false).unwrap();
+        editor.handle(Key::Char('i'));
+        for ch in "datetime".chars() {
+            editor.handle(Key::Char(ch));
+        }
+        assert_eq!(editor.mode, Mode::Completion);
+        assert!(editor.completion_items[0].contains(' '));
+        editor.handle(Key::Enter);
+        assert_eq!(editor.mode, Mode::Insert);
+        assert!(editor.lines[0].starts_with("20"));
+        editor.handle(Key::Home);
+        assert_eq!(editor.col, 0);
+        editor.handle(Key::End);
+        assert_eq!(editor.col, editor.lines[0].chars().count());
     }
 }

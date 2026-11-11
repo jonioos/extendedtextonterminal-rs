@@ -54,21 +54,20 @@ fn file_icon(name: &str) -> &'static str {
         .extension()
         .and_then(|ext| ext.to_str())
     {
-        Some("rs") => "RS",
-        Some("ts" | "tsx") => "TS",
-        Some("js" | "jsx") => "JS",
-        Some("py") => "PY",
-        Some("go") => "GO",
-        Some("c" | "h") => "C",
-        Some("cc" | "cpp" | "cxx" | "hpp" | "hxx") => "C++",
-        Some("cs") => "C#",
-        Some("vb") => "VB",
-        Some("md" | "markdown") => "MD",
-        Some("toml" | "json" | "yaml" | "yml") => "CFG",
-        Some("html" | "htm") => "HTML",
-        Some("css") => "CSS",
-        Some("sh" | "bash") => "SH",
-        _ => "TXT",
+        Some("rs") => "",
+        Some("ts" | "tsx") => "",
+        Some("js" | "jsx") => "",
+        Some("py") => "",
+        Some("go") => "",
+        Some("c" | "h") => "",
+        Some("cc" | "cpp" | "cxx" | "hpp" | "hxx") => "",
+        Some("cs" | "vb") => "",
+        Some("md" | "markdown") => "",
+        Some("toml" | "json" | "yaml" | "yml") => "",
+        Some("html" | "htm") => "",
+        Some("css") => "",
+        Some("sh" | "bash") => "",
+        _ => "",
     }
 }
 fn active_line_background(config: &Config) -> &'static str {
@@ -306,15 +305,29 @@ fn append_statusline(
     height: usize,
 ) {
     let editor = workspace.active();
-    let (mode, badge): (&str, &str) = match editor.mode {
-        Mode::Normal => ("NORMAL", "\x1b[48;2;122;162;247m"),
-        Mode::Insert => ("INSERT", "\x1b[48;2;158;206;106m"),
-        Mode::Visual | Mode::VisualLine | Mode::VisualBlock => ("VISUAL", "\x1b[48;2;187;154;247m"),
-        Mode::Command => ("COMMAND", "\x1b[48;2;224;175;104m"),
-        Mode::Replace | Mode::ReplaceOne => ("REPLACE", "\x1b[48;2;247;118;142m"),
-        Mode::Search(_) => ("SEARCH", "\x1b[48;2;224;175;104m"),
-        Mode::OperatorPending => ("OPERATOR", "\x1b[48;2;125;207;255m"),
-        _ => ("ETOT", "\x1b[48;2;125;207;255m"),
+    let (mode, badge, accent): (&str, &str, &str) = match editor.mode {
+        Mode::Normal => ("NORMAL", "\x1b[48;2;122;162;247m", "\x1b[38;2;122;162;247m"),
+        Mode::Insert => ("INSERT", "\x1b[48;2;158;206;106m", "\x1b[38;2;158;206;106m"),
+        Mode::Visual | Mode::VisualLine | Mode::VisualBlock => {
+            ("VISUAL", "\x1b[48;2;187;154;247m", "\x1b[38;2;187;154;247m")
+        }
+        Mode::Command => (
+            "COMMAND",
+            "\x1b[48;2;224;175;104m",
+            "\x1b[38;2;224;175;104m",
+        ),
+        Mode::Replace | Mode::ReplaceOne => (
+            "REPLACE",
+            "\x1b[48;2;247;118;142m",
+            "\x1b[38;2;247;118;142m",
+        ),
+        Mode::Search(_) => ("SEARCH", "\x1b[48;2;224;175;104m", "\x1b[38;2;224;175;104m"),
+        Mode::OperatorPending => (
+            "OPERATOR",
+            "\x1b[48;2;125;207;255m",
+            "\x1b[38;2;125;207;255m",
+        ),
+        _ => ("ETOT", "\x1b[48;2;125;207;255m", "\x1b[38;2;125;207;255m"),
     };
     let bar = if config.ui.theme == "light" {
         "\x1b[48;2;221;225;238;38;2;52;59;88m"
@@ -322,8 +335,7 @@ fn append_statusline(
         "\x1b[48;2;24;27;42;38;2;192;202;245m"
     };
     out.push_str(&format!(
-        "\x1b[{};1H{bar}\x1b[2K{badge}\x1b[38;2;24;27;42m {mode} > {bar}",
-        height - 1
+        "\x1b[{height};1H{bar}\x1b[2K{badge}\x1b[38;2;24;27;42m {mode} {bar}{accent}{bar}"
     ));
     let name = editor
         .path
@@ -338,11 +350,6 @@ fn append_statusline(
         if editor.modified { " *" } else { "" },
         if editor.readonly { " RO" } else { "" }
     );
-    let file_width = width.saturating_sub(mode.len() + 50);
-    out.push_str(&fit_cells(
-        &file,
-        file_width.min(visual_width(file.chars())),
-    ));
     let errors = diagnostics.iter().filter(|diag| diag.severity == 1).count();
     let warnings = diagnostics.iter().filter(|diag| diag.severity == 2).count();
     let percent = (editor.row + 1) * 100 / editor.lines.len().max(1);
@@ -360,7 +367,7 @@ fn append_statusline(
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "text".into());
     let right = format!(
-        "  {} {language}  E:{errors}  W:{warnings}   {}%   {}:{}  ",
+        "  {} {language}  E:{errors}  W:{warnings}   {}%   {}:{} ",
         if workspace.window_count() > 1 {
             "||"
         } else {
@@ -370,12 +377,23 @@ fn append_statusline(
         editor.row + 1,
         editor.col + 1
     );
-    let right_width = visual_width(right.chars());
-    if width > right_width + mode.len() + 8 {
+    let saved = editor
+        .last_saved_at
+        .and_then(etot_rs::datetime::hhmm)
+        .unwrap_or_else(|| "--:--".into());
+    let clock = format!("  {saved} ");
+    let right_width = visual_width(right.chars()) + visual_width(clock.chars()) + 1;
+    let show_right = width > right_width + mode.len() + 6;
+    let file_width =
+        width.saturating_sub(mode.len() + if show_right { right_width + 4 } else { 4 });
+    out.push_str(&fit_cells(
+        &file,
+        file_width.min(visual_width(file.chars())),
+    ));
+    if show_right {
         let x = width - right_width + 1;
         out.push_str(&format!(
-            "\x1b[{};{x}H{bar}\x1b[38;2;122;162;247m{right}",
-            height - 1
+            "\x1b[{height};{x}H{bar}\x1b[38;2;122;162;247m{right}\x1b[48;2;122;162;247m\x1b[38;2;24;27;42m{clock}"
         ));
     }
     out.push_str("\x1b[0m");
@@ -386,9 +404,10 @@ struct HintView {
 }
 const EX_COMMANDS: &[(&str, &str)] = &[
     ("$end", "salva ed esci"),
-    ("$quit", "esci senza salvare"),
+    ("$quit", "esci con conferma"),
     ("$undo", "annulla modifica"),
     ("$redo", "ripristina modifica"),
+    ("$copy", "copia selezione Visual"),
     ("w", "salva"),
     ("wa", "salva tutti"),
     ("wq", "salva ed esci"),
@@ -726,6 +745,45 @@ fn append_completion_popup(
         "─".repeat(inside)
     ));
 }
+fn append_dialog_popup(
+    out: &mut String,
+    workspace: &Workspace,
+    config: &Config,
+    width: usize,
+    height: usize,
+) -> Option<(usize, usize)> {
+    let (title, message) = workspace.dialog_view()?;
+    if width < 28 || height < 8 {
+        return None;
+    }
+    let box_width = width.saturating_sub(4).min(76);
+    let inside = box_width - 2;
+    let x = (width - box_width) / 2 + 1;
+    let y = (height / 3).max(3);
+    let background = if config.ui.theme == "light" {
+        "\x1b[48;2;235;238;247m"
+    } else {
+        "\x1b[48;2;26;28;42m"
+    };
+    let border = "\x1b[38;2;125;207;255m";
+    let caption = format!("─ {title} ");
+    out.push_str(&format!(
+        "\x1b[{y};{x}H{background}{border}╭{caption}{}╮",
+        "─".repeat(inside.saturating_sub(visual_width(caption.chars())))
+    ));
+    out.push_str(&format!(
+        "\x1b[{};{x}H{background}{border}│\x1b[38;2;192;202;245m{}{}{border}│",
+        y + 1,
+        fit_cells(&message, inside),
+        background
+    ));
+    out.push_str(&format!(
+        "\x1b[{};{x}H{background}{border}╰{}╯\x1b[0m",
+        y + 2,
+        "─".repeat(inside)
+    ));
+    Some((y + 1, x + 2))
+}
 #[derive(Default)]
 struct Input {
     pending: Option<u8>,
@@ -779,10 +837,33 @@ impl Input {
                     Some(b'B') => Key::Down,
                     Some(b'C') => Key::Right,
                     Some(b'D') => Key::Left,
+                    Some(b'H') => Key::Home,
+                    Some(b'F') => Key::End,
+                    Some(b'1') => match self.byte()? {
+                        Some(b'~') => Key::Home,
+                        _ => Key::Esc,
+                    },
+                    Some(b'4') => match self.byte()? {
+                        Some(b'~') => Key::End,
+                        _ => Key::Esc,
+                    },
+                    Some(b'5') => match self.byte()? {
+                        Some(b'~') => Key::PageUp,
+                        _ => Key::Esc,
+                    },
+                    Some(b'6') => match self.byte()? {
+                        Some(b'~') => Key::PageDown,
+                        _ => Key::Esc,
+                    },
                     Some(b'3') => match self.byte()? {
                         Some(b'~') => Key::Delete,
                         _ => Key::Esc,
                     },
+                    _ => Key::Esc,
+                },
+                Some(b'O') => match self.byte()? {
+                    Some(b'H') => Key::Home,
+                    Some(b'F') => Key::End,
                     _ => Key::Esc,
                 },
                 Some(other) => {
@@ -1036,7 +1117,8 @@ fn draw(
     }
     append_statusline(&mut out, workspace, config, diagnostics, width, height);
     out.push_str(&format!(
-        "\x1b[{height};1H{}\x1b[2K{}",
+        "\x1b[{};1H{}\x1b[2K{}",
+        height - 1,
         canvas_background(config),
         canvas_foreground(config)
     ));
@@ -1072,7 +1154,7 @@ fn draw(
     let (cursor_row, cursor_col) =
         if matches!(editor.mode, Mode::Search(_) | Mode::Command | Mode::Picker) {
             (
-                height,
+                height - 1,
                 editor.prompt.chars().count()
                     + if editor.mode == Mode::Picker {
                         12
@@ -1091,6 +1173,8 @@ fn draw(
     append_completion_popup(&mut out, editor, width, height, (cursor_row, cursor_col));
     let (cursor_row, cursor_col) = terminal
         .map(|terminal| append_terminal_panel(&mut out, terminal, height, width))
+        .unwrap_or((cursor_row, cursor_col));
+    let (cursor_row, cursor_col) = append_dialog_popup(&mut out, workspace, config, width, height)
         .unwrap_or((cursor_row, cursor_col));
     out.push_str(&format!(
         "\x1b[{cursor_row};{cursor_col}H{}\x1b[?25h\x1b[?2026l",
@@ -1425,7 +1509,8 @@ fn draw_split(
     }
     append_statusline(&mut out, workspace, config, diagnostics, width, height);
     out.push_str(&format!(
-        "\x1b[{height};1H{}\x1b[2K{}",
+        "\x1b[{};1H{}\x1b[2K{}",
+        height - 1,
         canvas_background(config),
         canvas_foreground(config)
     ));
@@ -1451,7 +1536,7 @@ fn draw_split(
     }
     if matches!(editor.mode, Mode::Search(_) | Mode::Command | Mode::Picker) {
         cursor = (
-            height,
+            height - 1,
             editor.prompt.chars().count()
                 + if editor.mode == Mode::Picker {
                     12
@@ -1468,6 +1553,7 @@ fn draw_split(
     cursor = terminal
         .map(|terminal| append_terminal_panel(&mut out, terminal, height, width))
         .unwrap_or(cursor);
+    cursor = append_dialog_popup(&mut out, workspace, config, width, height).unwrap_or(cursor);
     out.push_str(&format!(
         "\x1b[{};{}H{}\x1b[?25h\x1b[?2026l",
         cursor.0.min(height),
@@ -1488,7 +1574,7 @@ fn run() -> io::Result<()> {
                 return Ok(());
             }
             "--help" | "-h" => {
-                println!("etot [--edit|--read] [file|directory]\nNormal: i/I/a/A insert, Esc normal, ? or / search, Ctrl+P files\nVim: . repeat, \"a register, \"+ clipboard, qa/@a macro, Ctrl+w windows, gt/gT tabs\nCommands: :w :wa :q :q! :wq $end $quit $undo $redo :e FILE :bn :bp :buffers :bd :split :vsplit :tabnew :tabnext :tabprevious :tabclose :grep PATTERN :Format :Lint :SessionSave :SessionLoad :GitStatus :GitDiff :!COMMAND :terminal\nTerminal panel: Ctrl+\\ closes\nLSP: gd definition, gr references, K hover, Ctrl+Space completion\nLSP commands: :LspDiagnostics :LspFormat :LspSymbols :LspCodeActions :LspRename NAME");
+                println!("etot [--edit|--read] [file|directory]\nNormal: i/I/a/A insert, Esc normal, ? or / search, Ctrl+P files\nNavigation: Home/End line, PageUp/PageDown screen; $ opens ETOT commands\nVim: . repeat, \"a register, \"+ clipboard, qa/@a macro, Ctrl+w windows, gt/gT tabs\nCommands: :w :wa :q :q! :wq $end [FILE] $quit $undo $redo; Visual: $copy\nMore: :e FILE :bn :bp :buffers :bd :split :vsplit :tabnew :tabnext :tabprevious :tabclose :grep PATTERN :Format :Lint :SessionSave :SessionLoad :GitStatus :GitDiff :!COMMAND :terminal\nInsert: type datetime or timeHMS, then Enter to insert local date or time\nTerminal panel: Ctrl+\\ closes\nLSP: gd definition, gr references, K hover, Ctrl+Space completion\nLSP commands: :LspDiagnostics :LspFormat :LspSymbols :LspCodeActions :LspRename NAME");
                 return Ok(());
             }
             "--read" => readonly = true,
@@ -1822,8 +1908,29 @@ fn run() -> io::Result<()> {
             }
             continue;
         }
+        if workspace.has_dialog() {
+            workspace.handle(key);
+            continue;
+        }
         if key == Key::Ctrl('c') {
             workspace.handle(Key::Esc);
+            continue;
+        }
+        if matches!(key, Key::PageUp | Key::PageDown)
+            && matches!(
+                workspace.active().mode,
+                Mode::Normal
+                    | Mode::Insert
+                    | Mode::Visual
+                    | Mode::VisualLine
+                    | Mode::VisualBlock
+                    | Mode::Replace
+            )
+        {
+            let body = size().0.saturating_sub(3).max(1);
+            workspace
+                .active_mut()
+                .scroll_rows(key == Key::PageDown, body);
             continue;
         }
         if workspace.active().mode == Mode::Command && key == Key::Ctrl('i') {
@@ -2271,15 +2378,17 @@ mod tests {
         assert!(suggestions.contains("\x1b[7;19H"));
         assert!(suggestions.contains("LspFormat"));
         append_statusline(&mut output, &workspace, &config, &[], 100, 24);
-        assert!(output.contains("COMMAND >"));
-        assert!(output.contains("TXT"));
+        assert!(output.contains("\x1b[24;1H"));
+        assert!(output.contains(" COMMAND "));
+        assert!(output.contains(""));
+        assert!(output.contains(" --:--"));
     }
     #[test]
     fn dollar_commands_appear_below_top_cmdline() {
         let mut workspace = Workspace::open(None, false).unwrap();
         workspace.active_mut().lines = vec!["abc".into()];
         workspace.handle(Key::Char('$'));
-        assert_eq!(workspace.active().col, 2);
+        assert_eq!(workspace.active().col, 0);
         let config = Config::default();
         let mut popup = String::new();
         assert!(append_command_popup(&mut popup, &workspace, &config, 100, 24).is_none());

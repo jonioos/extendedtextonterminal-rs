@@ -6,7 +6,23 @@ use crate::{Editor, Key, Mode};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Copy)]
+enum SaveFinish {
+    End,
+    Quit,
+}
+enum Dialog {
+    Quit {
+        buffer: usize,
+    },
+    SaveConflict {
+        buffer: usize,
+        target: PathBuf,
+        finish: SaveFinish,
+    },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SplitAxis {
@@ -205,6 +221,9 @@ pub struct Workspace {
     window_prefix: bool,
     tab_prefix: bool,
     dollar_prefix: bool,
+    visual_command_mode: Option<Mode>,
+    dialog: Option<Dialog>,
+    quit_ignored: Vec<usize>,
     pub forced_quit: bool,
     pub quit: bool,
 }
@@ -241,12 +260,41 @@ impl Workspace {
             window_prefix: false,
             tab_prefix: false,
             dollar_prefix: false,
+            visual_command_mode: None,
+            dialog: None,
+            quit_ignored: Vec::new(),
             forced_quit: false,
             quit: false,
         })
     }
     pub fn active(&self) -> &Editor {
         &self.buffers[self.current]
+    }
+    pub fn has_dialog(&self) -> bool {
+        self.dialog.is_some()
+    }
+    pub fn dialog_view(&self) -> Option<(&'static str, String)> {
+        match self.dialog.as_ref()? {
+            Dialog::Quit { buffer } => {
+                let name = self.buffers[*buffer]
+                    .path
+                    .as_ref()
+                    .and_then(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Untitled".into());
+                Some((
+                    "Confirm",
+                    format!("Save changes to \"{name}\"?  [Y]es  [N]o  [C]ancel"),
+                ))
+            }
+            Dialog::SaveConflict { target, .. } => {
+                let name = target.file_name().unwrap_or_default().to_string_lossy();
+                Some((
+                    "Save as",
+                    format!("\"{name}\" exists.  [O]verwrite  [D]uplicate  [C]ancel"),
+                ))
+            }
+        }
     }
     pub fn journal_signatures(&self) -> Vec<(u64, bool, Option<u64>)> {
         self.buffers.iter().map(Editor::journal_signature).collect()
@@ -381,7 +429,7 @@ impl Workspace {
                 title: "Comandi $",
                 choices: &[
                     ("$end", "salva ed esci"),
-                    ("$quit", "esci senza salvare"),
+                    ("$quit", "esci con conferma"),
                     ("$undo", "annulla modifica"),
                     ("$redo", "ripristina modifica"),
                 ],
@@ -771,8 +819,196 @@ impl Workspace {
         }
         Ok(written)
     }
+    fn begin_quit(&mut self) {
+        if let Some(buffer) = self
+            .buffers
+            .iter()
+            .enumerate()
+            .find(|(index, editor)| editor.modified && !self.quit_ignored.contains(index))
+            .map(|(index, _)| index)
+        {
+            self.dialog = Some(Dialog::Quit { buffer });
+        } else {
+            self.forced_quit = !self.quit_ignored.is_empty();
+            self.quit = true;
+            self.quit_ignored.clear();
+        }
+    }
+    fn finish_end(&mut self, copied: bool) {
+        if self
+            .buffers
+            .iter()
+            .enumerate()
+            .any(|(index, editor)| index != self.current && editor.modified)
+        {
+            self.active_mut().message = "Other buffers have unsaved changes".into();
+        } else {
+            self.forced_quit = copied && self.active().modified;
+            self.quit = true;
+        }
+    }
+    fn begin_end_to(&mut self, target: PathBuf) {
+        if target.as_os_str().is_empty() {
+            self.active_mut().message = "File name required".into();
+            return;
+        }
+        let copied = self
+            .active()
+            .path
+            .as_deref()
+            .is_some_and(|path| path != target);
+        match self.active_mut().save_as(&target, false) {
+            Ok(()) => self.finish_end(copied),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                self.dialog = Some(Dialog::SaveConflict {
+                    buffer: self.current,
+                    target,
+                    finish: SaveFinish::End,
+                });
+            }
+            Err(error) => self.active_mut().message = format!("Save: {error}"),
+        }
+    }
+    fn finish_save_to(
+        &mut self,
+        buffer: usize,
+        target: &Path,
+        overwrite: bool,
+        finish: SaveFinish,
+    ) -> io::Result<()> {
+        let copied = self.buffers[buffer]
+            .path
+            .as_deref()
+            .is_some_and(|path| path != target);
+        self.buffers[buffer].save_as(target, overwrite)?;
+        match finish {
+            SaveFinish::End => self.finish_end(copied),
+            SaveFinish::Quit => self.begin_quit(),
+        }
+        Ok(())
+    }
+    fn duplicate_path(target: &Path, index: usize) -> PathBuf {
+        let stem = target.file_stem().unwrap_or_default().to_string_lossy();
+        let suffix = target
+            .extension()
+            .map(|extension| format!(".{}", extension.to_string_lossy()))
+            .unwrap_or_default();
+        target.with_file_name(format!("{stem}-{index}{suffix}"))
+    }
+    fn dialog_key(&mut self, key: Key) {
+        let Some(dialog) = self.dialog.take() else {
+            return;
+        };
+        match dialog {
+            Dialog::Quit { buffer } => match key {
+                Key::Char('y' | 'Y') => {
+                    let result = if self.buffers[buffer].path.is_some() {
+                        self.buffers[buffer].save()
+                    } else {
+                        self.buffers[buffer].save_as(Path::new("Untitled"), false)
+                    };
+                    match result {
+                        Ok(()) => self.begin_quit(),
+                        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                            self.dialog = Some(Dialog::SaveConflict {
+                                buffer,
+                                target: PathBuf::from("Untitled"),
+                                finish: SaveFinish::Quit,
+                            });
+                        }
+                        Err(error) => {
+                            self.buffers[buffer].message = format!("Save: {error}");
+                            self.dialog = Some(Dialog::Quit { buffer });
+                        }
+                    }
+                }
+                Key::Char('n' | 'N') => {
+                    self.quit_ignored.push(buffer);
+                    self.begin_quit();
+                }
+                Key::Char('c' | 'C') | Key::Esc => {
+                    self.quit_ignored.clear();
+                    self.active_mut().message = "Quit cancelled".into();
+                }
+                _ => self.dialog = Some(Dialog::Quit { buffer }),
+            },
+            Dialog::SaveConflict {
+                buffer,
+                target,
+                finish,
+            } => match key {
+                Key::Char('o' | 'O') => {
+                    if let Err(error) = self.finish_save_to(buffer, &target, true, finish) {
+                        self.buffers[buffer].message = format!("Save: {error}");
+                        self.dialog = Some(Dialog::SaveConflict {
+                            buffer,
+                            target,
+                            finish,
+                        });
+                    }
+                }
+                Key::Char('d' | 'D') => {
+                    let mut result =
+                        Err(io::Error::new(io::ErrorKind::AlreadyExists, "no free name"));
+                    for index in 1..=10_000 {
+                        let candidate = Self::duplicate_path(&target, index);
+                        result = self.finish_save_to(buffer, &candidate, false, finish);
+                        if result
+                            .as_ref()
+                            .err()
+                            .is_none_or(|error| error.kind() != io::ErrorKind::AlreadyExists)
+                        {
+                            break;
+                        }
+                    }
+                    if let Err(error) = result {
+                        self.buffers[buffer].message = format!("Save: {error}");
+                        self.dialog = Some(Dialog::SaveConflict {
+                            buffer,
+                            target,
+                            finish,
+                        });
+                    }
+                }
+                Key::Char('c' | 'C') | Key::Esc => match finish {
+                    SaveFinish::End => {
+                        let editor = self.active_mut();
+                        editor.mode = Mode::Command;
+                        editor.prompt = "$end ".into();
+                        editor.message = "Choose another file name".into();
+                    }
+                    SaveFinish::Quit => {
+                        self.quit_ignored.clear();
+                        self.active_mut().message = "Quit cancelled".into();
+                    }
+                },
+                _ => {
+                    self.dialog = Some(Dialog::SaveConflict {
+                        buffer,
+                        target,
+                        finish,
+                    })
+                }
+            },
+        }
+    }
     fn command(&mut self, command: &str) -> bool {
+        if let Some(mode) = self.visual_command_mode.take() {
+            let editor = self.active_mut();
+            editor.mode = mode;
+            editor.prompt.clear();
+            if command == "$copy" {
+                editor.copy_visual_selection();
+            } else {
+                editor.message = "Visual command: use $copy".into();
+            }
+            return true;
+        }
         match command {
+            _ if command.starts_with("$end ") => {
+                self.begin_end_to(PathBuf::from(command[5..].trim()));
+                true
+            }
             "SessionSave" | "SessionLoad" => {
                 let result = state::session_path().and_then(|file| {
                     if command == "SessionSave" {
@@ -916,7 +1152,7 @@ impl Workspace {
                 self.close_window();
                 true
             }
-            "q!" | "quit!" | "$quit" if self.window_count() > 1 || self.tabs.len() > 1 => {
+            "q!" | "quit!" if self.window_count() > 1 || self.tabs.len() > 1 => {
                 self.close_window();
                 true
             }
@@ -927,15 +1163,11 @@ impl Workspace {
                 }
                 true
             }
-            "q" | "quit" => {
-                if self.buffers.iter().any(|buffer| buffer.modified) {
-                    self.active_mut().message = "Unsaved buffers (:q! to quit)".into();
-                } else {
-                    self.quit = true;
-                }
+            "q" | "quit" | "$quit" => {
+                self.begin_quit();
                 true
             }
-            "q!" | "quit!" | "$quit" => {
+            "q!" | "quit!" => {
                 self.forced_quit = true;
                 self.quit = true;
                 true
@@ -984,6 +1216,31 @@ impl Workspace {
         }
     }
     pub fn handle(&mut self, key: Key) {
+        if self.dialog.is_some() {
+            self.dialog_key(key);
+            return;
+        }
+        if self.visual_command_mode.is_some()
+            && key == Key::Esc
+            && self.active().mode == Mode::Command
+        {
+            let mode = self.visual_command_mode.take().unwrap();
+            let editor = self.active_mut();
+            editor.mode = mode;
+            editor.prompt.clear();
+            return;
+        }
+        if matches!(
+            self.active().mode,
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        ) && key == Key::Char('$')
+        {
+            self.visual_command_mode = Some(self.active().mode);
+            let editor = self.active_mut();
+            editor.mode = Mode::Command;
+            editor.prompt = "$".into();
+            return;
+        }
         if self.active().mode == Mode::Normal {
             if self.dollar_prefix {
                 self.dollar_prefix = false;
@@ -1000,7 +1257,6 @@ impl Workspace {
                 }
             }
             if key == Key::Char('$') && !self.tab_prefix && !self.window_prefix {
-                self.active_mut().handle(key);
                 self.dollar_prefix = true;
                 return;
             }
@@ -1296,8 +1552,8 @@ mod tests {
         ex(&mut workspace, &format!("e {}", two.display()));
         ex(&mut workspace, "q");
         assert!(!workspace.quit);
-        assert!(workspace.active().message.contains("Unsaved buffers"));
-        ex(&mut workspace, "q!");
+        assert!(workspace.has_dialog());
+        workspace.handle(Key::Char('n'));
         assert!(workspace.quit);
     }
     #[test]
@@ -1329,12 +1585,14 @@ mod tests {
         workspace.handle(Key::Enter);
     }
     #[test]
-    fn dollar_commands_save_or_discard_and_keep_line_end_motion() {
+    fn dollar_commands_save_or_confirm_quit_and_end_key_moves_line() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("notes.txt");
         std::fs::write(&path, "abc\n").unwrap();
         let mut workspace = Workspace::open(Some(path.clone()), false).unwrap();
         workspace.handle(Key::Char('$'));
+        assert_eq!(workspace.active().col, 0);
+        workspace.handle(Key::End);
         assert_eq!(workspace.active().col, 2);
         workspace.handle(Key::Left);
         assert_eq!(workspace.active().col, 1);
@@ -1358,6 +1616,8 @@ mod tests {
             workspace.handle(Key::Char(key));
         }
         workspace.handle(Key::Enter);
+        assert!(workspace.has_dialog());
+        workspace.handle(Key::Char('n'));
         assert!(workspace.quit);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "aXbc\n");
     }
@@ -1422,5 +1682,93 @@ mod tests {
         assert_eq!(workspace.len(), 2);
         ex(&mut workspace, "bp");
         assert_eq!(workspace.active().mode, Mode::Explorer);
+    }
+    #[test]
+    fn end_to_new_file_and_conflict_choices() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("fresh.txt");
+        let mut unnamed = Workspace::open(None, false).unwrap();
+        for key in [Key::Char('i'), Key::Char('A'), Key::Esc] {
+            unnamed.handle(key);
+        }
+        for ch in format!("$end {}", fresh.display()).chars() {
+            unnamed.handle(Key::Char(ch));
+        }
+        unnamed.handle(Key::Enter);
+        assert!(unnamed.quit);
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "A\n");
+
+        let original = dir.path().join("original.txt");
+        let occupied = dir.path().join("copy.txt");
+        std::fs::write(&original, "before\n").unwrap();
+        std::fs::write(&occupied, "keep\n").unwrap();
+        let mut workspace = Workspace::open(Some(original.clone()), false).unwrap();
+        for key in [Key::Char('i'), Key::Char('X'), Key::Esc] {
+            workspace.handle(key);
+        }
+        ex(&mut workspace, &format!("$end {}", occupied.display()));
+        assert!(workspace.has_dialog());
+        workspace.handle(Key::Char('d'));
+        assert!(workspace.quit);
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), "before\n");
+        assert_eq!(std::fs::read_to_string(&occupied).unwrap(), "keep\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("copy-1.txt")).unwrap(),
+            "Xbefore\n"
+        );
+
+        let mut overwrite = Workspace::open(Some(original.clone()), false).unwrap();
+        for key in [Key::Char('i'), Key::Char('Z'), Key::Esc] {
+            overwrite.handle(key);
+        }
+        ex(&mut overwrite, &format!("$end {}", occupied.display()));
+        assert!(overwrite.has_dialog());
+        overwrite.handle(Key::Char('o'));
+        assert!(overwrite.quit);
+        assert_eq!(std::fs::read_to_string(&occupied).unwrap(), "Zbefore\n");
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), "before\n");
+
+        let mut workspace = Workspace::open(Some(original), false).unwrap();
+        ex(&mut workspace, &format!("$end {}", occupied.display()));
+        workspace.handle(Key::Char('c'));
+        assert_eq!(workspace.active().mode, Mode::Command);
+        assert_eq!(workspace.active().prompt, "$end ");
+        let another = dir.path().join("another.txt");
+        for ch in another.to_string_lossy().chars() {
+            workspace.handle(Key::Char(ch));
+        }
+        workspace.handle(Key::Enter);
+        assert!(workspace.quit);
+        assert_eq!(std::fs::read_to_string(another).unwrap(), "before\n");
+    }
+    #[test]
+    fn quit_dialog_and_visual_copy() {
+        let mut workspace = Workspace::open(None, false).unwrap();
+        for key in [
+            Key::Char('i'),
+            Key::Char('h'),
+            Key::Char('e'),
+            Key::Char('l'),
+            Key::Char('l'),
+            Key::Char('o'),
+            Key::Esc,
+        ] {
+            workspace.handle(key);
+        }
+        ex(&mut workspace, "q");
+        assert!(workspace.has_dialog());
+        assert!(workspace.dialog_view().unwrap().1.contains("Untitled"));
+        workspace.handle(Key::Char('c'));
+        assert!(!workspace.quit);
+        workspace.handle(Key::Home);
+        workspace.handle(Key::Char('v'));
+        workspace.handle(Key::Right);
+        for ch in "$copy".chars() {
+            workspace.handle(Key::Char(ch));
+        }
+        workspace.handle(Key::Enter);
+        assert_eq!(workspace.active().mode, Mode::Normal);
+        workspace.handle(Key::Char('p'));
+        assert!(workspace.active().lines[0].len() > 5);
     }
 }

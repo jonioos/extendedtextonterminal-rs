@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 project=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-target=${ETOT_INSTALL_PATH:-"$HOME/usr/bin/etot"}
+default_target="$HOME/usr/bin/etot"
+target=${ETOT_INSTALL_PATH:-"$default_target"}
 case "$target" in
   /*) ;;
   *) printf '%s\n' 'ETOT_INSTALL_PATH must be absolute' >&2; exit 2 ;;
@@ -18,3 +19,45 @@ trap 'rm -f -- "$temporary"' EXIT HUP INT TERM
 install -m 755 "$project/target/release/etot" "$temporary"
 mv -f -- "$temporary" "$target"
 printf 'ETOT Rust installed at %s\n' "$target"
+if [ "$target" = "$default_target" ]; then
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*)
+      install -d "$HOME/.local/bin"
+      if [ ! -e "$HOME/.local/bin/etot" ] && [ ! -L "$HOME/.local/bin/etot" ]; then
+        ln -s "$target" "$HOME/.local/bin/etot"
+      fi
+      ;;
+    *) printf 'Run %s or add %s to PATH\n' "$target" "$(dirname -- "$target")" ;;
+  esac
+fi
+if [ "${ETOT_INSTALL_FONT:-1}" != 0 ] && [ "$(id -u)" -ne 0 ]; then
+  font_dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/etot"
+  install -d "$font_dir"
+  font_changed=0
+  for name in 'MesloLGS NF Regular.ttf' 'MesloLGS NF Bold.ttf' 'MesloLGS NF Italic.ttf' 'MesloLGS NF Bold Italic.ttf'; do
+    font_file="$font_dir/$name"
+    case "$name" in
+      'MesloLGS NF Regular.ttf') checksum=d97946186e97f8d7c0139e8983abf40a1d2d086924f2c5dbf1c29bd8f2c6e57d ;;
+      'MesloLGS NF Bold.ttf') checksum=b6c0199cf7c7483c8343ea020658925e6de0aeb318b89908152fcb4d19226003 ;;
+      'MesloLGS NF Italic.ttf') checksum=6f357bcbe2597704e157a915625928bca38364a89c22a4ac36e7a116dcd392ef ;;
+      'MesloLGS NF Bold Italic.ttf') checksum=56b4131adecec052c4b324efb818dd326d586dbc316fc68f98f1cae2eb8d1220 ;;
+    esac
+    if [ -s "$font_file" ] && printf '%s  %s\n' "$checksum" "$font_file" | sha256sum -c - >/dev/null 2>&1; then
+      continue
+    fi
+    encoded=$(printf '%s' "$name" | sed 's/ /%20/g')
+    url="https://raw.githubusercontent.com/romkatv/powerlevel10k-media/145eb9fbc2f42ee408dacd9b22d8e6e0e553f83d/$encoded"
+    download=$(mktemp "$font_dir/.etot-font.XXXXXX")
+    if command -v curl >/dev/null 2>&1 && curl -fsSL --connect-timeout 5 --max-time 45 "$url" -o "$download" && printf '%s  %s\n' "$checksum" "$download" | sha256sum -c - >/dev/null 2>&1; then
+      mv -f -- "$download" "$font_file"
+      font_changed=1
+    else
+      rm -f -- "$download"
+      printf 'Could not install %s; ETOT remains usable. Source: %s\n' "$name" "$url" >&2
+    fi
+  done
+  if [ "$font_changed" -eq 1 ] && command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -f "$font_dir" >/dev/null 2>&1 || true
+  fi
+  printf 'For ETOT icons, select "MesloLGS NF" as your terminal font. Set ETOT_INSTALL_FONT=0 to skip font installation.\n'
+fi

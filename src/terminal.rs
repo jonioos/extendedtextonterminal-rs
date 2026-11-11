@@ -1,5 +1,5 @@
 use crate::Key;
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize, PtySystem};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{self, Read, Write};
 use std::num::NonZeroU16;
 use std::path::Path;
@@ -105,6 +105,10 @@ impl TerminalPane {
             Key::Down => b"\x1b[B".to_vec(),
             Key::Right => b"\x1b[C".to_vec(),
             Key::Left => b"\x1b[D".to_vec(),
+            Key::Home => b"\x1b[H".to_vec(),
+            Key::End => b"\x1b[F".to_vec(),
+            Key::PageUp => b"\x1b[5~".to_vec(),
+            Key::PageDown => b"\x1b[6~".to_vec(),
             Key::Ctrl(' ') => vec![0],
             Key::Ctrl(ch) if ch.is_ascii_lowercase() => vec![ch as u8 - b'a' + 1],
             Key::Ctrl(_) => Vec::new(),
